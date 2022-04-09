@@ -1,13 +1,12 @@
-package impl
+package sessimpl
 
 import (
 	"fmt"
 	"sync"
 
-	"si-mqtt/cluster/store"
-
 	"gmqtt/broker/message"
 	sess "gmqtt/broker/session"
+	"gmqtt/broker/store"
 	"gmqtt/broker/topic"
 )
 
@@ -153,7 +152,7 @@ func (s *session) AddTopicAlice(topic string, alice uint16) {
 	s.topicAliceRe[topic] = alice
 }
 
-func (s *session) GetTopicAlice(topic string) (uint16, bool) {
+func (s *session) GetTopicAlice(topic []byte) (uint16, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tp, exist := s.topicAliceRe[string(topic)]

@@ -1,14 +1,13 @@
-package impl
+package sessimpl
 
 import (
 	"context"
 	"errors"
 	"sync"
 
-	"si-mqtt/cluster/store"
-
 	"gmqtt/broker/message"
 	sess "gmqtt/broker/session"
+	"gmqtt/broker/store"
 	. "gmqtt/common/log"
 )
 
@@ -37,7 +36,7 @@ func NewMemManager() sess.Manager {
 	}
 }
 
-func (prv *memManager) Get(id string, cMsg ...*message.ConnectMessage) (sess.Session, error) {
+func (prv *memManager) GetOrCreate(id string, cMsg ...*message.ConnectMessage) (sess.Session, error) {
 	prv.mu.RLock()
 	if len(cMsg) > 0 {
 		if cMsg[0] == nil {
@@ -69,7 +68,19 @@ func (prv *memManager) creat(cMsg []*message.ConnectMessage) (sess.Session, erro
 }
 
 func (prv *memManager) Save(s sess.Session) error {
-	err := prv.sessStore.StoreSession(context.Background(), s.ClientId(), s)
+	return prv.del(s, func(s sess.Session) error {
+		return prv.sessStore.StoreSession(context.Background(), s.ClientId(), s)
+	})
+}
+
+func (prv *memManager) Remove(s sess.Session) error {
+	return prv.del(s, func(s sess.Session) error {
+		return prv.sessStore.ClearSession(context.Background(), s.ClientId(), true)
+	})
+}
+
+func (prv *memManager) del(s sess.Session, handle func(s sess.Session) error) error {
+	err := handle(s)
 	if err != nil {
 		return err
 	}

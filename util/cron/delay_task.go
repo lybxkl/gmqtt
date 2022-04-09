@@ -7,6 +7,8 @@ import (
 	. "gmqtt/common/log"
 )
 
+var DelayTaskManager = NewMemDelayTaskManage()
+
 type ID = string
 
 type DelayTask struct {

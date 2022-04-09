@@ -6,8 +6,10 @@ import (
 )
 
 type Manager interface {
-	Get(id string, cMsg ...*message.ConnectMessage) (Session, error)
-	Save(session Session) error
+	GetOrCreate(id string, cMsg ...*message.ConnectMessage) (Session, error)
+	Save(s Session) error
+	Remove(s Session) error
+	Close() error
 }
 
 type Session interface {
@@ -18,7 +20,7 @@ type Session interface {
 
 	AddTopic(sub topic.Sub) error
 	AddTopicAlice(topic string, alice uint16)
-	GetTopicAlice(topic string) (uint16, bool)
+	GetTopicAlice(topic []byte) (uint16, bool)
 	GetAliceTopic(alice uint16) (string, bool)
 
 	RemoveTopic(topic string) error
