@@ -48,7 +48,7 @@ func GetServerName() string {
 type Server struct {
 	cfg *config.GConfig
 
-	// authMgr是我们将用于普通身份验证的认证管理器
+	// authMgr是我们将用于身份验证的认证管理器
 	authMgr auth.Manager
 	// 增强认证允许的方法
 	authPlusAllows *sync.Map // map[string]authplus.AuthPlus
@@ -239,7 +239,7 @@ func (server *Server) handleConnection(c io.Closer) (svc *service, err error) {
 	}
 
 	//要建立联系，我们必须
-	// 1.阅读并解码信息从连接线上的ConnectMessage
+	// 1.读并解码信息从连接线上的ConnectMessage
 	// 2.如果没有解码错误，则使用用户名和密码 或者增强认证 进行身份验证。 否则，发送ConnackMessage与合适的原因码。
 	// 3.如果身份验证成功，则创建一个新会话 或 检索现有会话
 	// 4.给客户端发送成功的ConnackMessage消息

@@ -57,7 +57,7 @@ type service struct {
 	// sess是这个MQTT会话的会话对象。它跟踪会话变量
 	//比如ClientId, KeepAlive，用户名等
 	sess        sess.Session
-	hasSendWill bool // 防止重复发送遗嘱使用
+	hasSendWill *atomic.Value // 防止重复发送遗嘱使用
 
 	//等待各种goroutines完成启动和停止
 	wgStarted sync.WaitGroup
@@ -116,6 +116,9 @@ func (svc *service) start(resp *message.ConnackMessage) error {
 	var max uint32 = math.MaxUint16 * 4 / 5
 
 	svc.sign = NewSign(svc.quota, svc.limit)
+	svc.hasSendWill = &atomic.Value{}
+	svc.hasSendWill.Store(false)
+
 	// If svc is a server
 	if !svc.client {
 		// Creat the onPublishFunc so it can be used for published messages

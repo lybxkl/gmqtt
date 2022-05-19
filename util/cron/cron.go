@@ -24,6 +24,18 @@ func (s *ScheduleCron) AddJob(spec, id string, job cron.Job) error {
 	return err
 }
 
+func (s *ScheduleCron) GetJob(id string) (cron.Job, bool) {
+	v, exist := s.ids.LoadAndDelete(id)
+	if !exist {
+		return nil, false
+	}
+	e := s.schedule.Entry(v.(cron.EntryID))
+	if e.Job == nil {
+		return nil, false
+	}
+	return e.Job, true
+}
+
 func (s *ScheduleCron) Remove(id string) {
 	v, exist := s.ids.LoadAndDelete(id)
 	if !exist {

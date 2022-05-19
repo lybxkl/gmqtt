@@ -16,10 +16,12 @@ type netReader interface {
 	io.Reader
 	SetReadDeadline(t time.Time) error
 }
+
 type netWriter interface {
 	io.Writer
 	SetWriteDeadline(t time.Time) error
 }
+
 type timeoutWriter struct {
 	d    time.Duration
 	conn netWriter
@@ -47,7 +49,6 @@ func (r timeoutReader) Read(b []byte) (int, error) {
 // receiver() reads data from the network, and writes the data into the incoming buffer
 func (svc *service) receiver() {
 	defer func() {
-		// Let's recover from panic
 		if r := recover(); r != nil {
 			Log.Errorf("(%s) Recovering from panic: %v", svc.cid(), r)
 		}
@@ -99,7 +100,7 @@ func (svc *service) receiver() {
 		}
 	//添加websocket，启动cl里有对websocket转tcp，这里就不用处理
 	//case *websocket.Conn:
-	//	glog.Errorf("(%s) Websocket: %v", svc.cid(), ErrInvalidConnectionType)
+	//	Log.Errorf("(%s) Websocket: %v", svc.cid(), ErrInvalidConnectionType)
 
 	default:
 		Log.Errorf("未知异常 (%s) %v", svc.cid(), ErrInvalidConnectionType)
@@ -109,14 +110,13 @@ func (svc *service) receiver() {
 // sender() writes data from the outgoing buffer to the network
 func (svc *service) sender() {
 	defer func() {
-		// Let's recover from panic
 		if r := recover(); r != nil {
 			Log.Errorf("(%s) Recovering from panic: %v", svc.cid(), r)
 		}
 
 		svc.wgStopped.Done()
-		if svc.sign.TooManyMessages() && svc.out.Len() == 0 {
-			Log.Debugf("BeyondQuota or TooManyMessages stop out buf, client : %v", svc.cid())
+		if svc.sign.TooManyMessages() { // && svc.out.Len() == 0
+			Log.Warnf("BeyondQuota or TooManyMessages stop out buf, client : %v", svc.cid())
 		}
 		Log.Debugf("(%s) Stopping sender", svc.cid())
 	}()
@@ -139,8 +139,8 @@ func (svc *service) sender() {
 					return
 				}
 				if svc.isDone() && (strings.Contains(err.Error(), "use of closed network connection")) {
-					// TODO 怎么处理这些未发送的
-					//
+					// TODO 怎么处理这些未发送的？
+					// 无需保存会话的直接断开即可，需要的也无需，因为会重发
 					return
 				}
 				if err != io.EOF {
@@ -151,15 +151,13 @@ func (svc *service) sender() {
 		}
 
 	//case *websocket.Conn:
-	//	glog.Errorf("(%s) Websocket not supported", svc.cid())
+	//	Log.Errorf("(%s) Websocket not supported", svc.cid())
 
 	default:
-		Log.Infof("(%s) Invalid connection type", svc.cid())
+		Log.Errorf("(%s) Invalid connection type", svc.cid())
 	}
 }
 
-// peekMessageSize() reads, but not commits, enough bytes to determine the size of
-// the next messagev5 and returns the type and size.
 // peekMessageSize()读取，但不提交，足够的字节来确定大小
 //下一条消息，并返回类型和大小。
 func (svc *service) peekMessageSize() (message.MessageType, int, error) {
@@ -174,31 +172,25 @@ func (svc *service) peekMessageSize() (message.MessageType, int, error) {
 		return 0, 0, err
 	}
 
-	// Let's read enough bytes to get the messagev5 header (msg type, remaining length)
 	//让我们读取足够的字节来获取消息头(msg类型，剩余长度)
 	for {
-		// If we have read 5 bytes and still not done, then there's a problem.
 		//如果我们已经读取了5个字节，但是仍然没有完成，那么就有一个问题。
 		if cnt > 5 {
 			// 剩余长度的第4个字节设置了延续位
 			return 0, 0, fmt.Errorf("sendrecv/peekMessageSize: 4th byte of remaining length has continuation bit set")
 		}
 
-		// Peek cnt bytes from the input buffer.
 		//从输入缓冲区中读取cnt字节。
 		b, err = svc.in.ReadWait(cnt)
 		if err != nil {
 			return 0, 0, err
 		}
 
-		// If not enough bytes are returned, then continue until there's enough.
 		//如果没有返回足够的字节，则继续，直到有足够的字节。
 		if len(b) < cnt {
 			continue
 		}
 
-		// If we got enough bytes, then check the last byte to see if the continuation
-		// bit is set. If so, increment cnt and continue peeking
 		//如果获得了足够的字节，则检查最后一个字节，看看是否延续
 		// 如果是，则增加cnt并继续窥视
 		if b[cnt-1] >= 0x80 {
@@ -208,11 +200,9 @@ func (svc *service) peekMessageSize() (message.MessageType, int, error) {
 		}
 	}
 
-	// Get the remaining length of the messagev5
 	//获取消息的剩余长度
 	remlen, m := binary.Uvarint(b[1:])
 
-	// Total messagev5 length is remlen + 1 (msg type) + m (remlen bytes)
 	//消息的总长度是remlen + 1 (msg类型)+ m (remlen字节)
 	total := int(remlen) + 1 + m
 
@@ -221,8 +211,6 @@ func (svc *service) peekMessageSize() (message.MessageType, int, error) {
 	return mtype, total, err
 }
 
-// peekMessage() reads a messagev5 from the buffer, but the bytes are NOT committed.
-// This means the buffer still thinks the bytes are not read yet.
 // peekMessage()从缓冲区读取消息，但是没有提交字节。
 //这意味着缓冲区仍然认为字节还没有被读取。
 func (svc *service) peekMessage(mtype message.MessageType, total int) (message.Message, int, error) {
@@ -237,17 +225,14 @@ func (svc *service) peekMessage(mtype message.MessageType, total int) (message.M
 		return nil, 0, ErrBufferNotReady
 	}
 
-	// Peek until we get total bytes
 	//Peek，直到我们得到总字节数
 	for i = 0; ; i++ {
-		// Peek remlen bytes from the input buffer.
 		//从输入缓冲区Peekremlen字节数。
 		b, err = svc.in.ReadWait(total)
 		if err != nil && err != ErrBufferInsufficientData {
 			return nil, 0, err
 		}
 
-		// If not enough bytes are returned, then continue until there's enough.
 		//如果没有返回足够的字节，则继续，直到有足够的字节。
 		if len(b) >= total {
 			break
@@ -322,17 +307,6 @@ func (svc *service) writeMessage(msg message.Message) (int, error) {
 		return 0, ErrBufferNotReady
 	}
 
-	// This is to serialize writes to the underlying buffer. Multiple goroutines could
-	// potentially get here because of calling Publish() or Subscribe() or other
-	// functions that will send messages. For example, if a messagev5 is received in
-	// another connetion, and the messagev5 needs to be published to svc client, then
-	// the Publish() function is called, and at the same time, another client could
-	// do exactly the same thing.
-	//
-	// Not an ideal fix though. If possible we should remove mutex and be lockfree.
-	// Mainly because when there's a large number of goroutines that want to publish
-	// to svc client, then they will all block. However, svc will do for now.
-	//
 	//这是串行写入到底层缓冲区。 多了goroutine可能
 	//可能是因为调用了Publish()或Subscribe()或其他方法而到达这里
 	//发送消息的函数。 例如，如果接收到一条消息

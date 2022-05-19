@@ -17,29 +17,11 @@ var (
 	errAckMessage  error = errors.New("Invalid messagev5 for acking")
 )
 
-// ackqueue is a growing queue implemented based on a ring buffer. As the buffer
-// gets full, it will auto-grow.
-//
-// ackqueue is used to store messages that are waiting for acks to come back. There
-// are a few scenarios in which acks are required.
-//   1. Client sends SUBSCRIBE messagev5 to server, waits for SUBACK.
-//   2. Client sends UNSUBSCRIBE messagev5 to server, waits for UNSUBACK.
-//   3. Client sends PUBLISH QoS 1 messagev5 to server, waits for PUBACK.
-//   4. Server sends PUBLISH QoS 1 messagev5 to client, waits for PUBACK.
-//   5. Client sends PUBLISH QoS 2 messagev5 to server, waits for PUBREC.
-//   6. Server sends PUBREC messagev5 to client, waits for PUBREL.
-//   7. Client sends PUBREL messagev5 to server, waits for PUBCOMP.
-//   8. Server sends PUBLISH QoS 2 messagev5 to client, waits for PUBREC.
-//   9. Client sends PUBREC messagev5 to server, waits for PUBREL.
-//   10. Server sends PUBREL messagev5 to client, waits for PUBCOMP.
-//   11. Client sends PINGREQ messagev5 to server, waits for PINGRESP.
 //Ackqueue是一个正在增长的队列，它是在一个环形缓冲区的基础上实现的。
-//作为缓冲
-//如果满了，它会自动增长。
+//作为缓冲 如果满了，它会自动增长。
 //
 // Ackqueue用于存储正在等待ack返回的消息。
-//在那里
-//是几个需要ack的场景。
+// 几个需要ack的场景。
 // 1。 客户端发送订阅消息到服务器，等待SUBACK。
 // 2。 客户端发送取消订阅消息到服务器，等待UNSUBACK。
 // 3。 客户端向服务器发送PUBLISH QoS 1消息，等待PUBACK。
@@ -102,15 +84,15 @@ func newAckqueue(n int) sess.Ackqueue {
 		ackdone: make([]sess.Ackmsg, 0),
 	}
 }
-func (d *ackqueue) Size() int64 {
-	return d.size
+func (aq *ackqueue) Size() int64 {
+	return aq.size
 }
 
 // Wait 将消息复制到一个等待队列中，并等待相应的消息
 // ack消息被接收。
-func (this *ackqueue) Wait(msg message.Message, onComplete interface{}) error {
-	this.mu.Lock()
-	defer this.mu.Unlock()
+func (aq *ackqueue) Wait(msg message.Message, onComplete interface{}) error {
+	aq.mu.Lock()
+	defer aq.mu.Unlock()
 
 	switch msg := msg.(type) {
 	case *message.PublishMessage:
@@ -118,16 +100,16 @@ func (this *ackqueue) Wait(msg message.Message, onComplete interface{}) error {
 			return errWaitMessage
 		}
 
-		this.insert(msg.PacketId(), msg, onComplete)
+		aq.insert(msg.PacketId(), msg, onComplete)
 
 	case *message.SubscribeMessage:
-		this.insert(msg.PacketId(), msg, onComplete)
+		aq.insert(msg.PacketId(), msg, onComplete)
 
 	case *message.UnsubscribeMessage:
-		this.insert(msg.PacketId(), msg, onComplete)
+		aq.insert(msg.PacketId(), msg, onComplete)
 
 	case *message.PingreqMessage:
-		this.ping = sess.Ackmsg{
+		aq.ping = sess.Ackmsg{
 			Mtype:      message.PINGREQ,
 			State:      message.RESERVED,
 			OnComplete: onComplete,
@@ -141,32 +123,32 @@ func (this *ackqueue) Wait(msg message.Message, onComplete interface{}) error {
 }
 
 // Ack 获取提供的Ack消息并更新消息等待的状态。
-func (this *ackqueue) Ack(msg message.Message) error {
-	this.mu.Lock()
-	defer this.mu.Unlock()
+func (aq *ackqueue) Ack(msg message.Message) error {
+	aq.mu.Lock()
+	defer aq.mu.Unlock()
 
 	switch msg.Type() {
 	case message.PUBACK, message.PUBREC, message.PUBREL, message.PUBCOMP, message.SUBACK, message.UNSUBACK:
 		// Check to see if the messagev5 w/ the same packet ID is in the queue
 		//查看是否有相同的数据包ID在队列中
-		i, ok := this.emap[msg.PacketId()]
+		i, ok := aq.emap[msg.PacketId()]
 		if ok {
 			//如果消息w/报文ID存在，更新消息状态并复制
 			// ack消息
-			this.ring[i].State = msg.Type()
+			aq.ring[i].State = msg.Type()
 
 			ml := msg.Len()
-			this.ring[i].Ackbuf = make([]byte, ml)
+			aq.ring[i].Ackbuf = make([]byte, ml)
 
-			_, err := msg.Encode(this.ring[i].Ackbuf)
+			_, err := msg.Encode(aq.ring[i].Ackbuf)
 			if err != nil {
 				return err
 			}
 		}
 
 	case message.PINGRESP:
-		if this.ping.Mtype == message.PINGREQ {
-			this.ping.State = message.PINGRESP
+		if aq.ping.Mtype == message.PINGREQ {
+			aq.ping.State = message.PINGRESP
 		}
 
 	default:
@@ -178,38 +160,38 @@ func (this *ackqueue) Ack(msg message.Message) error {
 
 // Acked  returns the list of messages that have completed the ack cycle.
 //返回已完成ack循环的消息列表。
-func (this *ackqueue) Acked() []sess.Ackmsg {
-	this.mu.Lock()
-	defer this.mu.Unlock()
+func (aq *ackqueue) Acked() []sess.Ackmsg {
+	aq.mu.Lock()
+	defer aq.mu.Unlock()
 
-	this.ackdone = this.ackdone[0:0]
+	aq.ackdone = aq.ackdone[0:0]
 
-	if this.ping.State == message.PINGRESP {
-		this.ackdone = append(this.ackdone, this.ping)
-		this.ping = sess.Ackmsg{}
+	if aq.ping.State == message.PINGRESP {
+		aq.ackdone = append(aq.ackdone, aq.ping)
+		aq.ping = sess.Ackmsg{}
 	}
 
 FORNOTEMPTY:
-	for !this.empty() {
-		switch this.ring[this.head].State {
+	for !aq.empty() {
+		switch aq.ring[aq.head].State {
 		case message.PUBACK, message.PUBREL, message.PUBCOMP, message.SUBACK, message.UNSUBACK:
-			this.ackdone = append(this.ackdone, this.ring[this.head])
-			this.removeHead()
+			aq.ackdone = append(aq.ackdone, aq.ring[aq.head])
+			aq.removeHead()
 		// TODO 之所以没有 messagev5.PUBREC，是因为在收到PUBCOMP后依旧会替换掉this.ring中那个位置的PUBCRC，到头来最终是执行的PUBCOMP
 		default:
 			break FORNOTEMPTY
 		}
 	}
 
-	return this.ackdone
+	return aq.ackdone
 }
 
-func (this *ackqueue) insert(pktid uint16, msg message.Message, onComplete interface{}) error {
-	if this.full() {
-		this.grow()
+func (aq *ackqueue) insert(pktid uint16, msg message.Message, onComplete interface{}) error {
+	if aq.full() {
+		aq.grow()
 	}
 
-	if _, ok := this.emap[pktid]; !ok {
+	if _, ok := aq.emap[pktid]; !ok {
 		// messagev5 length
 		ml := msg.Len()
 
@@ -226,19 +208,19 @@ func (this *ackqueue) insert(pktid uint16, msg message.Message, onComplete inter
 			return err
 		}
 
-		this.ring[this.tail] = am
-		this.emap[pktid] = this.tail
-		this.tail = this.increment(this.tail)
-		this.count++
+		aq.ring[aq.tail] = am
+		aq.emap[pktid] = aq.tail
+		aq.tail = aq.increment(aq.tail)
+		aq.count++
 	} else {
-		// If packet w/ pktid already exist, then this must be a PUBLISH messagev5
+		// If packet w/ pktid already exist, then aq must be a PUBLISH messagev5
 		// Other messagev5 types should never send with the same packet ID
 		pm, ok := msg.(*message.PublishMessage)
 		if !ok {
 			return fmt.Errorf("ack/insert: duplicate packet ID for %s messagev5", msg.Name())
 		}
 
-		// If this is a publish messagev5, then the DUP flag must be set. This is the
+		// If aq is a publish messagev5, then the DUP flag must be set. aq is the
 		// only scenario in which we will receive duplicate messages.
 		// 重复交付，将dup位置1
 		if pm.Dup() {
@@ -251,75 +233,75 @@ func (this *ackqueue) insert(pktid uint16, msg message.Message, onComplete inter
 	return nil
 }
 
-func (this *ackqueue) removeHead() error {
-	if this.empty() {
+func (aq *ackqueue) removeHead() error {
+	if aq.empty() {
 		return errQueueEmpty
 	}
 
-	it := this.ring[this.head]
-	// set this to empty sess.Ackmsg{} to ensure GC will collect the buffer
+	it := aq.ring[aq.head]
+	// set aq to empty sess.Ackmsg{} to ensure GC will collect the buffer
 	//将此设置为empty sess.Ackmsg{}，以确保GC将收集缓冲区
-	this.ring[this.head] = sess.Ackmsg{}
-	this.head = this.increment(this.head)
-	this.count--
-	delete(this.emap, it.Pktid)
+	aq.ring[aq.head] = sess.Ackmsg{}
+	aq.head = aq.increment(aq.head)
+	aq.count--
+	delete(aq.emap, it.Pktid)
 
 	return nil
 }
 
-func (this *ackqueue) grow() {
-	if math.MaxInt64/2 < this.size {
+func (aq *ackqueue) grow() {
+	if math.MaxInt64/2 < aq.size {
 		panic("new size will overflow int64")
 	}
 
-	newsize := this.size << 1
+	newsize := aq.size << 1
 	newmask := newsize - 1
 	newring := make([]sess.Ackmsg, newsize)
 
-	if this.tail > this.head {
-		copy(newring, this.ring[this.head:this.tail])
+	if aq.tail > aq.head {
+		copy(newring, aq.ring[aq.head:aq.tail])
 	} else {
-		copy(newring, this.ring[this.head:])
-		copy(newring[this.size-this.head:], this.ring[:this.tail])
+		copy(newring, aq.ring[aq.head:])
+		copy(newring[aq.size-aq.head:], aq.ring[:aq.tail])
 	}
 
-	this.size = newsize
-	this.mask = newmask
-	this.ring = newring
-	this.head = 0
-	this.tail = this.count
+	aq.size = newsize
+	aq.mask = newmask
+	aq.ring = newring
+	aq.head = 0
+	aq.tail = aq.count
 
-	this.emap = make(map[uint16]int64, this.size)
+	aq.emap = make(map[uint16]int64, aq.size)
 
-	for i := int64(0); i < this.tail; i++ {
-		this.emap[this.ring[i].Pktid] = i
+	for i := int64(0); i < aq.tail; i++ {
+		aq.emap[aq.ring[i].Pktid] = i
 	}
 }
-func (this *ackqueue) Len() int {
-	return this.len()
+func (aq *ackqueue) Len() int {
+	return aq.len()
 }
-func (this *ackqueue) len() int {
-	return int(this.count)
-}
-
-func (this *ackqueue) cap() int {
-	return int(this.size)
+func (aq *ackqueue) len() int {
+	return int(aq.count)
 }
 
-func (this *ackqueue) index(n int64) int64 {
-	return n & this.mask
+func (aq *ackqueue) cap() int {
+	return int(aq.size)
 }
 
-func (this *ackqueue) full() bool {
-	return this.count == this.size
+func (aq *ackqueue) index(n int64) int64 {
+	return n & aq.mask
 }
 
-func (this *ackqueue) empty() bool {
-	return this.count == 0
+func (aq *ackqueue) full() bool {
+	return aq.count == aq.size
 }
 
-func (this *ackqueue) increment(n int64) int64 {
-	return this.index(n + 1)
+func (aq *ackqueue) empty() bool {
+	return aq.count == 0
+}
+
+func (aq *ackqueue) increment(n int64) int64 {
+	return aq.index(n + 1)
 }
 
 // 验证是否是2的幂

@@ -315,7 +315,7 @@ func (svc *service) processIncoming(msg message.Message) error {
 // 发送遗嘱消息
 func (svc *service) sendWillMsg() {
 	willMsg := svc.sess.Will()
-	if willMsg != nil && !svc.hasSendWill {
+	if willMsg != nil && !svc.hasSendWill.Load().(bool) {
 		willMsgExpiry := svc.sess.CMsg().WillMsgExpiryInterval()
 		if willMsgExpiry > 0 {
 			willMsg.SetMessageExpiryInterval(willMsgExpiry)
@@ -335,8 +335,11 @@ func (svc *service) sendWillMsg() {
 				// 发送，只需要发送本地，集群的化，内部实现处理获取消息
 				svc.pubFn(data.(*message.PublishMessage), "", false) // TODO 发送遗嘱嘱消息时是否需要处理共享订阅
 			},
+			CancelCallback: func() {
+				svc.hasSendWill.Store(false)
+			},
 		})
-		svc.hasSendWill = true
+		svc.hasSendWill.Store(true)
 	}
 }
 
