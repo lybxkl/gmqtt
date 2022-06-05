@@ -1,7 +1,7 @@
 package topicimpl
 
 import (
-	"gmqtt/broker/topic"
+	"github.com/lybxkl/gmqtt/broker/topic"
 )
 
 func NewMemManager() topic.Manager {

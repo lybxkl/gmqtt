@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	. "gmqtt/common/log"
+	. "github.com/lybxkl/gmqtt/common/log"
 )
 
 var (
@@ -314,15 +314,7 @@ func (buf *buffer) Write(p []byte) (int, error) {
 	return total, nil
 }
 
-// Description below is copied completely from bufio.Peek()
-//   http://golang.org/pkg/bufio/#Reader.Peek
-// Peek returns the next n bytes without advancing the reader. The bytes stop being valid
-// at the next read call. If Peek returns fewer than n bytes, it also returns an error
-// explaining why the read is short. The error is bufio.ErrBufferFull if n is larger than
-// b's buffer size.
-// If there's not enough data to peek, error is ErrBufferInsufficientData.
-// If n < 0, error is bufio.ErrNegativeCount
-//下面的描述完全复制自bufio.Peek()
+//ReadPeek 下面的描述完全复制自bufio.Peek()
 // http://golang.org/pkg/bufio/ Reader.Peek
 // Peek返回接下来的n个字节，而不提前读取器。字节不再有效
 //在下一个read调用时。如果Peek返回的字节数小于n，那么它也会返回一个错误
@@ -447,11 +439,7 @@ func (buf *buffer) ReadWait(n int) ([]byte, error) {
 	return buf.buf[cindex : cindex+int64(n)], nil
 }
 
-// Commit moves the cursor forward by n bytes. It behaves like Read() except it doesn't
-// return any data. If there's enough data, then the cursor will be moved forward and
-// n will be returned. If there's not enough data, then the cursor will move forward
-// as much as possible, then return the number of positions (bytes) moved.
-// Commit将光标向前移动n个字节。它的行为类似于Read()，但它不是
+// ReadCommit Commit将光标向前移动n个字节。它的行为类似于Read()，但它不是
 //返回任何数据。如果有足够的数据，那么光标将向前移动
 // n将被返回。如果没有足够的数据，那么光标将向前移动
 //尽可能多地返回移动的位置(字节)数量。
@@ -487,11 +475,7 @@ func (buf *buffer) ReadCommit(n int) (int, error) {
 	return 0, ErrBufferInsufficientData
 }
 
-// WaitWrite waits for n bytes to be available in the buffer and then returns
-// 1. the slice pointing to the location in the buffer to be filled
-// 2. a boolean indicating whether the bytes available wraps around the ring
-// 3. any errors encountered. If there's error then other return values are invalid
-// WaitWrite等待缓冲区中可用的n个字节，然后返回
+// WriteWait 等待缓冲区中可用的n个字节，然后返回
 // 1。指向缓冲区中要填充的位置的片
 // 2。 一个布尔值，指示可用的字节是否包围环
 // 3。 遇到任何错误。 如果出现错误，则其他返回值无效

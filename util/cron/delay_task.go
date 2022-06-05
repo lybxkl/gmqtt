@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	. "gmqtt/common/log"
+	. "github.com/lybxkl/gmqtt/common/log"
 )
 
 var DelayTaskManager = NewMemDelayTaskManage()

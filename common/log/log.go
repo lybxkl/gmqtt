@@ -88,5 +88,5 @@ type _log struct {
 }
 
 func (l *_log) Close() error {
-	return l.Close()
+	return nil
 }

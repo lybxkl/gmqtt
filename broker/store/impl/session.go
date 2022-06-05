@@ -1,7 +1,7 @@
 package storeimpl
 
 import (
-	"gmqtt/broker/store"
+	"github.com/lybxkl/gmqtt/broker/store"
 )
 
 func NewSessStore() store.SessionStore {

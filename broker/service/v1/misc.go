@@ -4,57 +4,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/panjf2000/ants/v2"
-	"gmqtt/broker/message"
-	. "gmqtt/common/log"
-	"gmqtt/util/bufpool"
-
 	"io"
 	"net"
+
+	"github.com/lybxkl/gmqtt/broker/message"
+	. "github.com/lybxkl/gmqtt/common/log"
+	"github.com/lybxkl/gmqtt/util/bufpool"
 )
-
-var (
-	taskGPool     *ants.Pool
-	taskGPoolSize = 1000
-)
-
-func InitServiceTaskPool(poolSize int) (close io.Closer) {
-	if poolSize < 100 {
-		poolSize = 100
-	}
-	taskGPool, _ = ants.NewPool(poolSize, ants.WithPanicHandler(func(i interface{}) {
-		Log.Errorf("协程池处理错误：%v", i)
-	}), ants.WithMaxBlockingTasks(poolSize*2))
-	taskGPoolSize = poolSize
-	return &closer{}
-}
-
-type closer struct {
-}
-
-func (closer closer) Close() error {
-	taskGPool.Release()
-	return nil
-}
-
-func submit(f func()) {
-	dealAntsErr(taskGPool.Submit(f))
-}
-
-func dealAntsErr(err error) {
-	if err == nil {
-		return
-	}
-	if errors.Is(err, ants.ErrPoolClosed) {
-		Log.Errorf("协程池错误：%v", err.Error())
-		taskGPool.Reboot()
-	}
-	if errors.Is(err, ants.ErrPoolOverload) {
-		Log.Errorf("协程池超载：%v", err.Error())
-		taskGPool.Tune(int(float64(taskGPoolSize) * 1.25))
-	}
-	Log.Errorf("线程池处理异常：%v", err)
-}
 
 func getConnectMessage(conn io.Closer) (*message.ConnectMessage, error) {
 	buf, err := getMessageBuffer(conn)
@@ -105,6 +61,7 @@ func getAuthMessageOrOther(conn io.Closer) (message.Message, error) {
 		return nil, errors.New(fmt.Sprintf("error type %v,  %v", tp.Name(), err))
 	}
 }
+
 func getConnackMessage(conn io.Closer) (*message.ConnackMessage, error) {
 	buf, err := getMessageBuffer(conn)
 	if err != nil {
@@ -120,7 +77,7 @@ func getConnackMessage(conn io.Closer) (*message.ConnackMessage, error) {
 }
 
 //消息发送
-func writeMessage(conn io.Closer, msg message.Message) error {
+func writeMessage(conn io.Writer, msg message.Message) error {
 	buf := bufpool.BufferPoolGet()
 	defer bufpool.BufferPoolPut(buf)
 
@@ -131,7 +88,7 @@ func writeMessage(conn io.Closer, msg message.Message) error {
 	}
 	Log.Debugf("Writing: %s", msg)
 
-	return writeMessageBuffer(conn, buf.Bytes()) // TODO 是否会因为后面其它协程拿到此对象，重新继续塞数据时，会不会影响
+	return writeMessageBuffer(conn, buf.Bytes())
 }
 
 func getMessageBuffer(c io.Closer) ([]byte, error) {
@@ -198,7 +155,7 @@ func getMessageBuffer(c io.Closer) ([]byte, error) {
 	return buf, nil
 }
 
-func writeMessageBuffer(c io.Closer, b []byte) error {
+func writeMessageBuffer(c io.Writer, b []byte) error {
 	if c == nil {
 		return ErrInvalidConnectionType
 	}

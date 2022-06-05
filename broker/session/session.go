@@ -1,8 +1,8 @@
 package sess
 
 import (
-	"gmqtt/broker/message"
-	"gmqtt/broker/topic"
+	"github.com/lybxkl/gmqtt/broker/message"
+	"github.com/lybxkl/gmqtt/broker/topic"
 )
 
 type Manager interface {
@@ -41,7 +41,7 @@ type Session interface {
 }
 
 type Expand interface {
-	ExpiryInterval() uint32
+	SessExpiryInterval() uint32
 	Status() Status
 	ClientId() string
 	ReceiveMaximum() uint16
@@ -53,7 +53,7 @@ type Expand interface {
 
 	OfflineTime() int64
 
-	SetExpiryInterval(uint32)
+	SetSessExpiryInterval(uint32)
 	SetStatus(Status)
 	SetClientId(string)
 	SetReceiveMaximum(uint16)

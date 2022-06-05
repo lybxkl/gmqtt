@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	. "gmqtt/common/log"
+	. "github.com/lybxkl/gmqtt/common/log"
 )
 
 type Options []Option

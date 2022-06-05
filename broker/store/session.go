@@ -3,8 +3,8 @@ package store
 import (
 	"context"
 
-	"gmqtt/broker/message"
-	sess "gmqtt/broker/session"
+	"github.com/lybxkl/gmqtt/broker/message"
+	sess "github.com/lybxkl/gmqtt/broker/session"
 )
 
 type SessionStore interface {

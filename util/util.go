@@ -87,8 +87,8 @@ func Equal(k1, k2 interface{}) bool {
 	return false
 }
 
-var share = []byte{'$', 's', 'h', 'a', 'r', 'e'}
+var share = "$share/"
 
-func IsShareSub(topic []byte) bool {
-	return len(topic) > 6 && reflect.DeepEqual(topic[:6], share)
+func IsShareSub(topic string) bool {
+	return len(topic) > 6 && strings.HasPrefix(topic, share)
 }

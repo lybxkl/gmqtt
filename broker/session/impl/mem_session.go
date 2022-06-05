@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
-	"gmqtt/broker/message"
-	sess "gmqtt/broker/session"
-	"gmqtt/broker/store"
-	"gmqtt/broker/topic"
+	"github.com/lybxkl/gmqtt/broker/message"
+	sess "github.com/lybxkl/gmqtt/broker/session"
+	"github.com/lybxkl/gmqtt/broker/store"
+	"github.com/lybxkl/gmqtt/broker/topic"
 )
 
 const (
@@ -38,7 +38,6 @@ type session struct {
 	sid string // == 客户端id
 
 	AckQueues
-
 	// cMsg是连接消息
 	cMsg        *message.ConnectMessage
 	status      sess.Status // session状态
@@ -71,50 +70,63 @@ type session struct {
 }
 
 func NewMemSession(cMsg *message.ConnectMessage, op ...Option) (*session, error) {
-	s := &session{}
+	cbuf := make([]byte, cMsg.Len())
 
-	s.cMsg = cMsg
-	s.sid = string(cMsg.ClientId())
-	s.cbuf = make([]byte, cMsg.Len())
-
-	if _, err := cMsg.Encode(s.cbuf); err != nil {
+	if _, err := cMsg.Encode(cbuf); err != nil {
 		return nil, err
 	}
 
-	if _, err := s.cMsg.Decode(s.cbuf); err != nil {
+	if _, err := cMsg.Decode(cbuf); err != nil {
 		return nil, err
 	}
 
-	if s.cMsg.WillFlag() {
-		s.will = message.NewPublishMessage()
-		err := s.will.SetQoS(s.cMsg.WillQos())
+	var will *message.PublishMessage
+	if cMsg.WillFlag() {
+		will = message.NewPublishMessage()
+		err := will.SetQoS(cMsg.WillQos())
 		if err != nil {
 			return nil, err
 		}
-		err = s.will.SetTopic(s.cMsg.WillTopic())
+		err = will.SetTopic(cMsg.WillTopic())
 		if err != nil {
 			return nil, err
 		}
-		s.will.SetPayload(s.cMsg.WillMessage())
-		s.will.SetRetain(s.cMsg.WillRetain())
-		s.will.SetMessageExpiryInterval(s.cMsg.WillMsgExpiryInterval())
+		will.SetPayload(cMsg.WillMessage())
+		will.SetRetain(cMsg.WillRetain())
+		will.SetMessageExpiryInterval(cMsg.WillMsgExpiryInterval())
 	}
 
-	s.topics = make(map[string]*topic.Sub)
-	s.topicAlice = make(map[uint16]string)
-	s.topicAliceRe = make(map[string]uint16)
-	s.queueSize = defaultQueueSize
+	queueSize := defaultQueueSize
+	s := &session{
+		sid: string(cMsg.ClientId()),
+		AckQueues: AckQueues{
+			queueSize: queueSize,
+			pub1ack:   newAckqueue(queueSize << 1),
+			pub2in:    newAckqueue(queueSize << 1),
+			pub2out:   newAckqueue(queueSize << 1),
+			suback:    newAckqueue(queueSize >> 2),
+			unsuback:  newAckqueue(queueSize >> 2),
+			pingack:   newAckqueue(queueSize >> 3),
+		},
+		cMsg:         cMsg,
+		status:       sess.ONLINE,
+		offlineTime:  0, // 待查询后赋值
+		offlineMsg:   make([]message.Message, 0),
+		will:         will,
+		cbuf:         cbuf,
+		rbuf:         make([]byte, 0),
+		topics:       make(map[string]*topic.Sub),
+		topicAlice:   make(map[uint16]string),
+		topicAliceRe: make(map[string]uint16),
+		initted:      true,
+		mu:           sync.Mutex{},
+		stop:         0,
+	}
 
 	for _, option := range op {
 		option(s)
 	}
 
-	s.pub1ack = newAckqueue(s.queueSize << 1)
-	s.pub2in = newAckqueue(s.queueSize << 1)
-	s.pub2out = newAckqueue(s.queueSize << 1)
-	s.suback = newAckqueue(s.queueSize >> 4)
-	s.unsuback = newAckqueue(s.queueSize >> 4)
-	s.pingack = newAckqueue(s.queueSize >> 4)
 	return s, nil
 }
 
@@ -262,7 +274,7 @@ func (s *session) PingACK() sess.Ackqueue {
 	return s.pingack
 }
 
-func (s *session) ExpiryInterval() uint32 {
+func (s *session) SessExpiryInterval() uint32 {
 	return s.cMsg.SessionExpiryInterval()
 }
 
@@ -311,7 +323,7 @@ func (s *session) SetClientId(cid string) {
 	_ = s.cMsg.SetClientId([]byte(cid))
 }
 
-func (s *session) SetExpiryInterval(u uint32) {
+func (s *session) SetSessExpiryInterval(u uint32) {
 	s.cMsg.SetSessionExpiryInterval(u)
 }
 

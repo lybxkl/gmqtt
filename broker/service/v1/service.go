@@ -3,16 +3,16 @@ package service
 import (
 	"fmt"
 	"io"
-	"math"
-	"reflect"
 	"sync"
 	"sync/atomic"
 
-	"gmqtt/broker/message"
-	sess "gmqtt/broker/session"
-	"gmqtt/broker/topic"
-	. "gmqtt/common/log"
-	"gmqtt/util"
+	"github.com/lybxkl/gmqtt/broker/message"
+	sess "github.com/lybxkl/gmqtt/broker/session"
+	"github.com/lybxkl/gmqtt/broker/topic"
+	. "github.com/lybxkl/gmqtt/common/log"
+	"github.com/lybxkl/gmqtt/util"
+	"github.com/lybxkl/gmqtt/util/gopool"
+	"github.com/lybxkl/gmqtt/util/pkid"
 )
 
 type (
@@ -52,7 +52,7 @@ type service struct {
 	// 非规范：服务端可以把那些没有发送就被丢弃的报文放在死信队列 上，或者执行其他诊断操作。具体的操作超出了5.0规范的范围。
 	// maxPackageSize int
 
-	conn io.Closer
+	conn io.ReadWriteCloser
 
 	// sess是这个MQTT会话的会话对象。它跟踪会话变量
 	//比如ClientId, KeepAlive，用户名等
@@ -91,9 +91,11 @@ type service struct {
 	intmp  []byte
 	outtmp []byte
 
-	rmsgs []*message.PublishMessage
+	rmsgs []*message.PublishMessage // 用于待发送的保留消息
 
 	server *Server
+
+	pkIDLimiter pkid.Limiter
 }
 
 // 运行接入的连接，会产生三个协程异步逻辑处理，当前不会阻塞
@@ -112,119 +114,34 @@ func (svc *service) start(resp *message.ConnackMessage) error {
 		return err
 	}
 
-	var pkid uint32 = 1
-	var max uint32 = math.MaxUint16 * 4 / 5
-
 	svc.sign = NewSign(svc.quota, svc.limit)
 	svc.hasSendWill = &atomic.Value{}
 	svc.hasSendWill.Store(false)
+	svc.pkIDLimiter = pkid.NewPacketIDLimiter(svc.sess.ReceiveMaximum()) // 可作流控
 
 	// If svc is a server
 	if !svc.client {
-		// Creat the onPublishFunc so it can be used for published messages
 		// 这个是发送给订阅者的，是每个订阅者都有一份的方法
-		svc.onpub = func(msg *message.PublishMessage, sub topic.Sub, sender string, isShareMsg bool) error {
-			if msg.QoS() > 0 && !svc.sign.ReqQuota() {
-				// 超过配额
-				return nil
-			}
-			if !isShareMsg && sub.NoLocal && svc.cid() == sender {
-				Log.Debugf("no send  NoLocal option msg")
-				return nil
-			}
-			if !sub.RetainAsPublished { //为1，表示向此订阅转发应用消息时保持消息被发布时设置的保留（RETAIN）标志
-				msg.SetRetain(false)
-			}
-			if msg.QoS() > 0 {
-				pid := atomic.AddUint32(&pkid, 1) // FIXME 这里只是简单的处理pkid
-				if pid > max {
-					atomic.StoreUint32(&pkid, 1)
-				}
-				msg.SetPacketId(uint16(pid))
-			}
-			if sub.SubIdentifier > 0 {
-				msg.SetSubscriptionIdentifier(sub.SubIdentifier) // 订阅标识符
-			}
-			if alice, exist := svc.sess.GetTopicAlice(msg.Topic()); exist {
-				msg.SetNilTopicAndAlias(alice) // 直接替换主题为空了，用主题别名来表示
-			}
-			if err = svc.publish(msg, func(msg, ack message.Message, err error) error {
-				Log.Debugf("发送成功：%v,%v,%v", msg, ack, err)
-				return nil
-			}); err != nil {
-				Log.Errorf("service/onPublish: Error publishing message: %v", err)
-				return err
-			}
+		svc.onpub = svc.onPub
 
-			return nil
-		}
-		// If svc is a recovered session, then add any topic it subscribed before
-		//如果这是一个恢复的会话，那么添加它之前订阅的任何主题
-		tpc, err := svc.sess.Topics()
-		if err != nil {
+		// 恢复订阅
+		if err = svc.recoverSub(); err != nil {
 			return err
-		} else {
-			for _, t := range tpc {
-				if svc.server.cfg.CloseShareSub && len(t.Topic) > 6 && reflect.DeepEqual(t.Topic[:6], []byte{'$', 's', 'h', 'a', 'r', 'e'}) {
-					continue
-				}
-				_, _ = svc.server.topicsMgr.Subscribe(topic.Sub{
-					Topic:             t.Topic,
-					Qos:               t.Qos,
-					NoLocal:           t.NoLocal,
-					RetainAsPublished: t.RetainAsPublished,
-					RetainHandling:    t.RetainHandling,
-					SubIdentifier:     t.SubIdentifier,
-				}, &svc.onpub)
-			}
 		}
 	}
 
-	if resp != nil {
+	if resp != nil { // resp != nil 则需要断开连接
 		if err = writeMessage(svc.conn, resp); err != nil {
 			return err
 		}
 		svc.outStat.increment(int64(resp.Len()))
 	}
 
-	//处理器负责从缓冲区读取消息并进行处理
-	svc.wgStarted.Add(1)
-	svc.wgStopped.Add(1)
-	go svc.processor()
-
-	//接收端负责从连接中读取数据并将数据放入 一个缓冲区。
-	svc.wgStarted.Add(1)
-	svc.wgStopped.Add(1)
-	go svc.receiver()
-
-	//发送方负责将缓冲区中的数据写入连接。
-	svc.wgStarted.Add(1)
-	svc.wgStopped.Add(1)
-	go svc.sender()
+	svc.runProcessor() // run 处理逻辑
 
 	if !svc.client {
-		offline := svc.sess.OfflineMsg()    //  发送获取到的离线消息
-		for i := 0; i < len(offline); i++ { // 依次处理离线消息
-			pub := offline[i].(*message.PublishMessage)
-			// topic.Sub 获取
-			var (
-				subs   []interface{}
-				subOpt []topic.Sub
-			)
-			_ = svc.server.topicsMgr.Subscribers(pub.Topic(), pub.QoS(), &subs, &subOpt, false, "", false)
-			tag := false
-			for j := 0; j < len(subs); j++ {
-				if util.Equal(subs[i], &svc.onpub) {
-					tag = true
-					_ = svc.onpub(pub, subOpt[j], "", false)
-					break
-				}
-			}
-			if !tag {
-				_ = svc.onpub(pub, topic.Sub{}, "", false)
-			}
-		}
-		// FIXME 是否主动发送未完成确认的过程消息，还是等客户端操作
+		// 处理离线消息
+		svc.dealOfflineMsg()
 	}
 	// Wait for all the goroutines to start before returning
 	svc.wgStarted.Wait()
@@ -232,13 +149,127 @@ func (svc *service) start(resp *message.ConnackMessage) error {
 	return nil
 }
 
-// FIXME: The order of closing here causes panic sometimes. For example, if receiver
-// calls svc, and closes the buffers, somehow it causes buffer.go:476 to panid.
-func (svc *service) stop() {
+func (svc *service) recoverSub() error {
+	//如果这是一个恢复的会话，那么添加它之前订阅的任何主题
+	tpc, err := svc.sess.Topics()
+	if err != nil {
+		return err
+	}
+	for _, t := range tpc {
+		if svc.server.cfg.CloseShareSub && util.IsShareSub(t.Topic) {
+			continue
+		}
+		_, _ = svc.server.topicsMgr.Subscribe(topic.Sub{
+			Topic:             t.Topic,
+			Qos:               t.Qos,
+			NoLocal:           t.NoLocal,
+			RetainAsPublished: t.RetainAsPublished,
+			RetainHandling:    t.RetainHandling,
+			SubIdentifier:     t.SubIdentifier,
+		}, &svc.onpub)
+	}
+	return nil
+}
+
+func (svc *service) dealOfflineMsg() {
+	offline := svc.sess.OfflineMsg()    //  发送获取到的离线消息
+	for i := 0; i < len(offline); i++ { // 依次处理离线消息
+		pub := offline[i].(*message.PublishMessage)
+		// topic.Sub 获取
+		var (
+			subs   []interface{}
+			subOpt []topic.Sub
+		)
+		_ = svc.server.topicsMgr.Subscribers(pub.Topic(), pub.QoS(), &subs, &subOpt, false, "", false)
+		tag := false
+		for j := 0; j < len(subs); j++ {
+			if util.Equal(subs[i], &svc.onpub) {
+				tag = true
+				_ = svc.onpub(pub, subOpt[j], "", false)
+				break
+			}
+		}
+		if !tag {
+			_ = svc.onpub(pub, topic.Sub{}, "", false)
+		}
+	}
+	// FIXME 是否主动发送未完成确认的过程消息，还是等客户端操作
+}
+
+func (svc *service) onPub(msg *message.PublishMessage, sub topic.Sub, sender string, isShareMsg bool) error {
+	// 判断是否超过最大报文大小，超过客户端要求的最大值，直接当作已完成丢弃
+	// 共享订阅的情况下，如果一条消息对于部分客户端来说太长而不能发送，服务端可以选择丢弃此消息或者把消息发送给剩余能够接收此消息的客户端。
+	// 目前是直接丢弃
+	maxPkSize := svc.sess.MaxPacketSize()
+	if maxPkSize > 0 && int(maxPkSize) < msg.Len() {
+		// 服务端可以把那些没有发送就被丢弃的报文放在死信队列 上，或者执行其他诊断操作
+		Log.Warnf("the packet length exceeded the max packet size: sender: %s, isShareMsg: %v topic: %+v, message: %+v", sender, isShareMsg, sub, msg)
+		return nil
+	}
+
+	if msg.QoS() > 0 && !svc.sign.ReqQuota() {
+		// 超过配额
+		return nil
+	}
+	if !isShareMsg && sub.NoLocal && svc.cid() == sender {
+		Log.Debugf("no send noLocal option msg")
+		return nil
+	}
+	if !sub.RetainAsPublished { //为true，表示向此订阅转发应用消息时保持消息被发布时设置的保留（RETAIN）标志
+		msg.SetRetain(false)
+	}
+	if msg.QoS() > 0 { // qos = 0 的限流控制，需要其它控制， qos = 1 or 2则可以跳过此限流器控制
+		msg.SetPacketId(svc.pkIDLimiter.PollPacketID())
+	}
+	if sub.SubIdentifier > 0 {
+		msg.SetSubscriptionIdentifier(sub.SubIdentifier) // 订阅标识符
+	}
+	if alice, exist := svc.sess.GetTopicAlice(msg.Topic()); exist {
+		msg.SetNilTopicAndAlias(alice) // 直接替换主题为空了，用主题别名来表示
+	}
+
+	// 发送消息
+	if err := svc.publish(msg, func(msg, ack message.Message, err error) error {
+		Log.Debugf("发送成功：%v,%v,%v", msg, ack, err)
+		return nil
+	}); err != nil {
+		Log.Errorf("service/onPublish: Error publishing message: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+func (svc *service) runProcessor() {
+	//处理器负责从缓冲区读取消息并进行处理
+	svc.wgStarted.Add(1)
+	svc.wgStopped.Add(1)
+	gopool.GoSafe(svc.processor)
+
+	//接收端负责从连接中读取数据并将数据放入 一个缓冲区。
+	svc.wgStarted.Add(1)
+	svc.wgStopped.Add(1)
+	gopool.GoSafe(svc.receiver)
+
+	//发送方负责将缓冲区中的数据写入连接。
+	svc.wgStarted.Add(1)
+	svc.wgStopped.Add(1)
+	gopool.GoSafe(svc.sender)
+}
+
+func (svc *service) serverStopHandle() {
+	svc.stop(true)
+}
+
+// Stop calls svc, and closes the buffers, somehow it causes buffer.go:476 to panid.
+func (svc *service) stop(isServerStop ...bool) {
 	defer func() {
 		// Let's recover from panic
 		if r := recover(); r != nil {
 			Log.Errorf("(%s) Recovering from panic: %v", svc.cid(), r)
+		}
+		if len(isServerStop) > 0 && isServerStop[0] {
+			svc.server.svcs.Del(svc.id)
 		}
 	}()
 

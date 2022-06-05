@@ -6,8 +6,8 @@ import (
 	"math"
 	"sync"
 
-	"gmqtt/broker/message"
-	sess "gmqtt/broker/session"
+	"github.com/lybxkl/gmqtt/broker/message"
+	sess "github.com/lybxkl/gmqtt/broker/session"
 )
 
 var (

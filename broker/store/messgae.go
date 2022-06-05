@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"gmqtt/broker/message"
+	"github.com/lybxkl/gmqtt/broker/message"
 )
 
 type MessageStore interface {

@@ -1,7 +1,7 @@
 package runtimex
 
 import (
-	. "gmqtt/common/log"
+	. "github.com/lybxkl/gmqtt/common/log"
 )
 
 func Recover() {

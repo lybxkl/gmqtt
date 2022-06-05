@@ -8,43 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"gmqtt/broker/message"
-	. "gmqtt/common/log"
+	"github.com/lybxkl/gmqtt/broker/message"
+	. "github.com/lybxkl/gmqtt/common/log"
+	timeoutio "github.com/lybxkl/gmqtt/util/timeout_io"
 )
-
-type netReader interface {
-	io.Reader
-	SetReadDeadline(t time.Time) error
-}
-
-type netWriter interface {
-	io.Writer
-	SetWriteDeadline(t time.Time) error
-}
-
-type timeoutWriter struct {
-	d    time.Duration
-	conn netWriter
-}
-
-func (r timeoutWriter) Write(b []byte) (int, error) {
-	if err := r.conn.SetWriteDeadline(time.Now().Add(r.d)); err != nil {
-		return 0, err
-	}
-	return r.conn.Write(b)
-}
-
-type timeoutReader struct {
-	d    time.Duration
-	conn netReader
-}
-
-func (r timeoutReader) Read(b []byte) (int, error) {
-	if err := r.conn.SetReadDeadline(time.Now().Add(r.d)); err != nil {
-		return 0, err
-	}
-	return r.conn.Read(b)
-}
 
 // receiver() reads data from the network, and writes the data into the incoming buffer
 func (svc *service) receiver() {
@@ -73,11 +40,8 @@ func (svc *service) receiver() {
 		// 保持连接（Keep Alive）值为零的结果是关闭保持连接（Keep Alive）机制。
 		// 如果保持连接（Keep Alive）612 值为零，客户端不必按照任何特定的时间发送MQTT控制报文。
 		keepAlive := time.Second * time.Duration(svc.server.cfg.Keepalive)
-		r := timeoutReader{
-			d:    keepAlive + (keepAlive / 2),
-			conn: conn,
-		}
 
+		r := timeoutio.NewReader(conn, keepAlive+(keepAlive/2))
 		for {
 			_, err := svc.in.ReadFrom(r)
 			// 检查done是否关闭，如果关闭，退出
@@ -127,10 +91,7 @@ func (svc *service) sender() {
 	switch conn := svc.conn.(type) {
 	case net.Conn:
 		writeTimeout := time.Second * time.Duration(svc.server.cfg.WriteTimeout)
-		r := timeoutWriter{
-			d:    writeTimeout + (writeTimeout / 2),
-			conn: conn,
-		}
+		r := timeoutio.NewWriter(conn, writeTimeout+(writeTimeout/2))
 		for {
 			_, err := svc.out.WriteTo(r)
 			if err != nil {

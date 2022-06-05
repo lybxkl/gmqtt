@@ -5,10 +5,10 @@ import (
 	"errors"
 	"sync"
 
-	"gmqtt/broker/message"
-	sess "gmqtt/broker/session"
-	"gmqtt/broker/store"
-	. "gmqtt/common/log"
+	"github.com/lybxkl/gmqtt/broker/message"
+	sess "github.com/lybxkl/gmqtt/broker/session"
+	"github.com/lybxkl/gmqtt/broker/store"
+	. "github.com/lybxkl/gmqtt/common/log"
 )
 
 var _ sess.Manager = (*memManager)(nil)
@@ -43,7 +43,7 @@ func (prv *memManager) GetOrCreate(id string, cMsg ...*message.ConnectMessage) (
 			return nil, CMsgNotFound
 		}
 		prv.mu.RUnlock()
-		return prv.creat(cMsg)
+		return prv.creat(cMsg[0])
 	}
 
 	defer prv.mu.RUnlock()
@@ -55,9 +55,9 @@ func (prv *memManager) GetOrCreate(id string, cMsg ...*message.ConnectMessage) (
 	return _sess, nil
 }
 
-func (prv *memManager) creat(cMsg []*message.ConnectMessage) (sess.Session, error) {
-	newSid := string(cMsg[0].ClientId())
-	_sess, err := NewMemSession(cMsg[0]) // 获取离线消息，旧订阅
+func (prv *memManager) creat(cMsg *message.ConnectMessage) (sess.Session, error) {
+	newSid := string(cMsg.ClientId())
+	_sess, err := NewMemSession(cMsg) // 获取离线消息，旧订阅
 	if err != nil {
 		return nil, err
 	}

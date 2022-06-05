@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"gmqtt/common/config"
+	"github.com/lybxkl/gmqtt/common/config"
 )
 
 type BaseStore interface {

@@ -1,7 +1,7 @@
 package authimpl
 
 import (
-	"gmqtt/broker/auth"
+	"github.com/lybxkl/gmqtt/broker/auth"
 )
 
 func NewDefaultAuth() auth.Manager {

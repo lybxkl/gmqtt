@@ -1,7 +1,7 @@
 package sess
 
 import (
-	"gmqtt/broker/message"
+	"github.com/lybxkl/gmqtt/broker/message"
 )
 
 type Ackqueue interface {

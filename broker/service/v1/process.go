@@ -10,20 +10,19 @@ import (
 	"reflect"
 	"time"
 
-	"gmqtt/broker/message"
-	sess "gmqtt/broker/session"
-	"gmqtt/broker/topic"
-	. "gmqtt/common/log"
-	"gmqtt/util"
-	"gmqtt/util/bufpool"
-	"gmqtt/util/cron"
+	"github.com/lybxkl/gmqtt/broker/message"
+	sess "github.com/lybxkl/gmqtt/broker/session"
+	"github.com/lybxkl/gmqtt/broker/topic"
+	. "github.com/lybxkl/gmqtt/common/log"
+	"github.com/lybxkl/gmqtt/util"
+	"github.com/lybxkl/gmqtt/util/bufpool"
+	"github.com/lybxkl/gmqtt/util/cron"
 )
 
 var (
 	errDisconnect = errors.New("disconnect") // 直接close的错误信号
 )
 
-// processor() reads messages from the incoming buffer and processes them
 // processor()从传入缓冲区读取消息并处理它们
 func (svc *service) processor() {
 	defer func() {
@@ -535,9 +534,9 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 
 	for _, t := range tps {
 		// 简单处理，直接断开连接，返回原因码
-		if svc.server.cfg.CloseShareSub && util.IsShareSub(t) {
+		if svc.server.cfg.CloseShareSub && util.IsShareSub(string(t)) {
 			return message.NewCodeErr(message.UnsupportedSharedSubscriptions)
-		} else if !svc.server.cfg.CloseShareSub && util.IsShareSub(t) && msg.TopicNoLocal(t) {
+		} else if !svc.server.cfg.CloseShareSub && util.IsShareSub(string(t)) && msg.TopicNoLocal(t) {
 			// 共享订阅时把非本地选项设为1将造成协议错误（Protocol Error）
 			return message.NewCodeErr(message.ProtocolError)
 		}
@@ -570,7 +569,7 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 		}
 		retcodes = append(retcodes, rqos)
 
-		if !util.IsShareSub(t) { // 共享订阅不发送任何保留消息。
+		if !util.IsShareSub(string(t)) { // 共享订阅不发送任何保留消息。
 			//没有检查错误。如果有错误，我们不想订阅要停止，就return。
 			switch retainHandling {
 			case message.NoSendRetain:
@@ -641,7 +640,7 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 	return nil
 }
 
-// For UNSUBSCRIBE messagev5, we should remove the subscriber, and send back UNSUBACK
+// For UNSUBSCRIBE message, we should remove the subscriber, and send back UNSUBACK
 func (svc *service) processUnsubscribe(msg *message.UnsubscribeMessage) error {
 	tps := msg.Topics()
 

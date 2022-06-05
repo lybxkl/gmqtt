@@ -13,23 +13,25 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gmqtt/broker/store"
-	storeimpl "gmqtt/broker/store/impl"
-	"gmqtt/util/cron"
+	"github.com/lybxkl/gmqtt/broker/store"
+	storeimpl "github.com/lybxkl/gmqtt/broker/store/impl"
+	"github.com/lybxkl/gmqtt/util/collection"
+	"github.com/lybxkl/gmqtt/util/cron"
+	"github.com/lybxkl/gmqtt/util/gopool"
+	timeoutio "github.com/lybxkl/gmqtt/util/timeout_io"
 
-	"gmqtt/broker/auth"
-	authimpl "gmqtt/broker/auth/impl"
-	"gmqtt/broker/message"
-	sess "gmqtt/broker/session"
-	"gmqtt/broker/session/impl"
-	"gmqtt/broker/topic"
-	topicimpl "gmqtt/broker/topic/impl"
-	"gmqtt/common/config"
-	consts "gmqtt/common/constant"
-	. "gmqtt/common/log"
-	"gmqtt/util"
-	"gmqtt/util/middleware"
-	"gmqtt/util/runtimex"
+	"github.com/lybxkl/gmqtt/broker/auth"
+	authimpl "github.com/lybxkl/gmqtt/broker/auth/impl"
+	"github.com/lybxkl/gmqtt/broker/message"
+	sess "github.com/lybxkl/gmqtt/broker/session"
+	"github.com/lybxkl/gmqtt/broker/session/impl"
+	"github.com/lybxkl/gmqtt/broker/topic"
+	topicimpl "github.com/lybxkl/gmqtt/broker/topic/impl"
+	"github.com/lybxkl/gmqtt/common/config"
+	consts "github.com/lybxkl/gmqtt/common/constant"
+	. "github.com/lybxkl/gmqtt/common/log"
+	"github.com/lybxkl/gmqtt/util"
+	"github.com/lybxkl/gmqtt/util/middleware"
 )
 
 var (
@@ -64,11 +66,9 @@ type Server struct {
 
 	ln net.Listener
 
-	//用于更新svc的互斥锁
-	mu sync.Mutex
 	//服务器创建的服务列表。我们跟踪他们，这样我们就可以
 	//当服务器宕机时，如果它们仍然存在，那么可以优雅地关闭它们。
-	svcs []*service
+	svcs *collection.SafeMap //map[uint64]*service
 
 	//指示服务器是否运行的指示灯
 	running int32
@@ -91,10 +91,6 @@ func NewServer(cfg *config.GConfig) *Server {
 	return &Server{cfg: cfg}
 }
 
-//func (s *Server) TopicProvider() topics.Manager {
-//	return s.topicsMgr
-//}
-
 // ListenAndServe 监听请求的URI上的连接，并处理任何连接
 //传入的MQTT客户机会话。 在调用Close()之前，它不应该返回
 //或者有一些关键的错误导致服务器停止运行。
@@ -116,7 +112,7 @@ func (server *Server) ListenAndServe(uri string) error {
 	}
 
 	//这个是配置各种钩子，比如账号认证钩子
-	err = server.checkAndInitConfiguration()
+	err = server.checkAndInitConfig()
 	if err != nil {
 		panic(err)
 	}
@@ -127,7 +123,7 @@ func (server *Server) ListenAndServe(uri string) error {
 	if err != nil {
 		return err
 	}
-	defer server.ln.Close()
+	defer server.ln.Close() // nolint: errcheck
 
 	Log.Infof("AddMQTTHandler uri=%v", uri)
 	for {
@@ -159,14 +155,11 @@ func (server *Server) ListenAndServe(uri string) error {
 			}
 			return err
 		}
-
-		go func() {
-			defer runtimex.Recover()
-			_, handleErr := server.handleConnection(conn)
-			if handleErr != nil {
-				Log.Error(handleErr.Error())
+		gopool.GoSafe(func() {
+			if handleErr := server.handleConnection(conn); handleErr != nil {
+				Log.Error(handleErr)
 			}
-		}()
+		})
 	}
 }
 
@@ -180,6 +173,16 @@ func (server *Server) Close() error {
 	// By closing the quit channel, we are telling the server to stop accepting new
 	// connection.
 	close(server.quit)
+
+	// 关闭剩余连接
+	_ = server.svcs.Range(func(_, v interface{}) error {
+		v1, ok := v.(*service)
+		if !ok {
+			return nil
+		}
+		v1.serverStopHandle()
+		return nil
+	})
 
 	if server.sessMgr != nil {
 		err := server.sessMgr.Close()
@@ -214,16 +217,10 @@ func (server *Server) Close() error {
 	return nil
 }
 
-func (server *Server) NewService() *service {
-	return &service{
-		clusterBelong: true,
-	}
-}
-
 // handleConnection 用于代理处理来自客户机的传入连接
-func (server *Server) handleConnection(c io.Closer) (svc *service, err error) {
+func (server *Server) handleConnection(c io.Closer) (err error) {
 	if c == nil {
-		return nil, ErrInvalidConnectionType
+		return ErrInvalidConnectionType
 	}
 
 	defer func() {
@@ -235,7 +232,7 @@ func (server *Server) handleConnection(c io.Closer) (svc *service, err error) {
 
 	conn, ok := c.(net.Conn)
 	if !ok {
-		return nil, ErrInvalidConnectionType
+		return ErrInvalidConnectionType
 	}
 
 	//要建立联系，我们必须
@@ -245,15 +242,17 @@ func (server *Server) handleConnection(c io.Closer) (svc *service, err error) {
 	// 4.给客户端发送成功的ConnackMessage消息
 	// 从连线中读取连接消息，如果错误，则检查它是否正确一个连接错误。
 	// 如果是连接错误，请返回正确的连接错误
-	util.MustPanic(conn.SetReadDeadline(time.Now().Add(time.Second * time.Duration(server.cfg.ConnectTimeout))))
 
-	// 等待连接认证
-	req, resp, err := server.conAuth(conn)
-	if err != nil || resp == nil {
-		return nil, err
+	// 等待连接认证, 使用连接超时配置作为读写超时配置
+	req, resp, err := server.conAuth(timeoutio.NewRWCloser(conn, time.Second*time.Duration(server.cfg.ConnectTimeout)))
+	if err != nil {
+		return err
+	}
+	if resp == nil { // 重定向了
+		return nil
 	}
 
-	svc = &service{
+	svc := &service{
 		id:     atomic.AddUint64(&gsvcid, 1),
 		client: false,
 
@@ -262,7 +261,7 @@ func (server *Server) handleConnection(c io.Closer) (svc *service, err error) {
 	}
 	svc.sess, err = server.getSession(svc.id, req, resp)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	resp.SetReasonCode(message.Success)
@@ -275,20 +274,18 @@ func (server *Server) handleConnection(c io.Closer) (svc *service, err error) {
 
 	if err = svc.start(resp); err != nil {
 		svc.stop()
-		return nil, err
+		return err
 	}
 
-	server.mu.Lock()
-	server.svcs = append(server.svcs, svc)
-	server.mu.Unlock()
+	server.svcs.Set(svc.id, svc)
 
 	Log.Debugf("(%s) server/handleConnection: Connection established.", svc.cid())
 
-	return svc, nil
+	return nil
 }
 
 // 连接认证
-func (server *Server) conAuth(conn net.Conn) (*message.ConnectMessage, *message.ConnackMessage, error) {
+func (server *Server) conAuth(conn io.ReadWriteCloser) (*message.ConnectMessage, *message.ConnackMessage, error) {
 	resp := message.NewConnackMessage()
 	if !server.cfg.Broker.CloseShareSub { // 简单处理，热修改需要考虑的东西有点复杂
 		resp.SetSharedSubscriptionAvailable(1)
@@ -380,7 +377,7 @@ func (server *Server) conAuth(conn net.Conn) (*message.ConnectMessage, *message.
 	return req, resp, nil
 }
 
-func (server *Server) auth(conn net.Conn, resp *message.ConnackMessage, req *message.ConnectMessage) error {
+func (server *Server) auth(conn io.ReadWriteCloser, resp *message.ConnackMessage, req *message.ConnectMessage) error {
 	// 增强认证
 	authMethod := req.AuthMethod() // 第一次的增强认证方法
 	if len(authMethod) > 0 {
@@ -450,7 +447,7 @@ func (server *Server) auth(conn net.Conn, resp *message.ConnackMessage, req *mes
 	return nil
 }
 
-func (server *Server) checkAndInitConfiguration() error {
+func (server *Server) checkAndInitConfig() error {
 	var err error
 
 	server.configOnce.Do(func() {
@@ -469,6 +466,10 @@ func (server *Server) checkAndInitConfiguration() error {
 		if server.cfg.TimeoutRetries == 0 {
 			server.cfg.TimeoutRetries = consts.TimeoutRetries
 		}
+
+		server.svcs = collection.NewSafeMap()
+		server.subs = make([]interface{}, 0)
+		server.qoss = make([]byte, 0)
 
 		// store
 		server.initStore()

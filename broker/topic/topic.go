@@ -1,13 +1,13 @@
 package topic
 
 import (
-	"gmqtt/broker/message"
+	"github.com/lybxkl/gmqtt/broker/message"
 )
 
 type Sub struct {
-	Topic             string
-	Qos               byte
-	NoLocal           bool
+	Topic             string // 主题
+	Qos               byte   // qos
+	NoLocal           bool   // 非本地
 	RetainAsPublished bool
 	RetainHandling    message.RetainHandling
 	SubIdentifier     uint32 // 订阅标识符

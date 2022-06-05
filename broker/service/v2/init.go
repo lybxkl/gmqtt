@@ -1,8 +1,8 @@
 package v2
 
 import (
-	"gmqtt/broker/message"
-	"gmqtt/broker/topic"
+	"github.com/lybxkl/gmqtt/broker/message"
+	"github.com/lybxkl/gmqtt/broker/topic"
 )
 
 type Init interface {
