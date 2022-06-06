@@ -45,7 +45,7 @@ type ConnectMessage struct {
 	sessionExpiryInterval uint32   // 会话过期间隔
 	receiveMaximum        uint16   // 接收最大值
 	maxPacketSize         uint32   // 最大报文长度是 MQTT 控制报文的总长度
-	topicAliasMax         uint16   // 主题别名最大值（Topic Alias Maximum）
+	topicAliasMax         uint16   // 主题别名最大值（Topic Alias Maximum）没有设置主题别名最大值属性的情况下，主题别名最大值默认为零
 	requestRespInfo       byte     // 一个字节表示的 0 或 1, 请求响应信息
 	requestProblemInfo    byte     // 一个字节表示的 0 或 1 , 请求问题信息
 	userProperty          [][]byte // 用户属性，可变报头的 , 每对属性都是串行放置 [k1][v1][k2][v2]

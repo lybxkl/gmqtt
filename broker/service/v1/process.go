@@ -26,7 +26,6 @@ var (
 // processor()从传入缓冲区读取消息并处理它们
 func (svc *service) processor() {
 	defer func() {
-		// Let's recover from panic
 		if r := recover(); r != nil {
 			Log.Errorf("(%s) Recovering from panic: %v", svc.cid(), r)
 		}
@@ -68,7 +67,7 @@ func (svc *service) processor() {
 		msg, n, err := svc.peekMessage(mtype, total)
 		if err != nil {
 			if err != io.EOF {
-				Log.Errorf("(%s) Error peeking next messagev5: %v", svc.cid(), err)
+				Log.Errorf("(%s) Error peeking next message: %v", svc.cid(), err)
 			}
 			return
 		}
@@ -182,7 +181,7 @@ func (svc *service) processIncoming(msg message.Message) error {
 
 	switch msg := msg.(type) {
 	case *message.PublishMessage:
-		// For PUBLISH messagev5, we should figure out what QoS it is and process accordingly
+		// For PUBLISH message, we should figure out what QoS it is and process accordingly
 		// If QoS == 0, we should just take the next step, no ack required
 		// If QoS == 1, we should send back PUBACK, then take the next step
 		// If QoS == 2, we need to put it in the ack queue, send back PUBREC
@@ -190,7 +189,7 @@ func (svc *service) processIncoming(msg message.Message) error {
 
 	case *message.PubackMessage:
 		svc.sign.AddQuota() // 增加配额
-		// For PUBACK messagev5, it means QoS 1, we should send to ack queue
+		// For PUBACK message, it means QoS 1, we should send to ack queue
 		if err = svc.sess.Pub1ACK().Ack(msg); err != nil {
 			err = message.NewCodeErr(message.UnspecifiedError, err.Error())
 			break
@@ -201,7 +200,7 @@ func (svc *service) processIncoming(msg message.Message) error {
 			svc.sign.AddQuota()
 		}
 
-		// For PUBREC messagev5, it means QoS 2, we should send to ack queue, and send back PUBREL
+		// For PUBREC message, it means QoS 2, we should send to ack queue, and send back PUBREL
 		if err = svc.sess.Pub2out().Ack(msg); err != nil {
 			err = message.NewCodeErr(message.UnspecifiedError, err.Error())
 			break
@@ -447,21 +446,25 @@ func (svc *service) processAcked(ackq sess.Ackqueue) {
 func (svc *service) topicAliceIn(msg *message.PublishMessage) error {
 	if msg.TopicAlias() > 0 && len(msg.Topic()) == 0 {
 		if tp, ok := svc.sess.GetAliceTopic(msg.TopicAlias()); ok {
-			_ = msg.SetTopic([]byte(tp))
+			_ = msg.SetTopic([]byte(tp)) // 转换为正确的主题
+			msg.SetTopicAlias(0)         // 并将此主题别名置0
 			Log.Debugf("%v set topic by alice ==> topic：%v alice：%v", svc.cid(), tp, msg.TopicAlias())
-		} else {
-			return message.NewCodeErr(message.ProtocolError)
+			return nil
 		}
-	} else if msg.TopicAlias() > svc.sess.TopicAliasMax() {
-		return message.NewCodeErr(message.ProtocolError)
-	} else if msg.TopicAlias() > 0 && len(msg.Topic()) > 0 {
+		return message.NewCodeErr(message.InvalidTopicAlias, fmt.Sprintf("no found topic alias: %d", msg.TopicAlias()))
+	}
+	if msg.TopicAlias() > 0 && len(msg.Topic()) > 0 {
 		// 需要保存主题别名，只会与当前连接保存生命一致
-		if svc.sess.TopicAliasMax() < msg.TopicAlias() {
+		if msg.TopicAlias() > svc.sess.TopicAliasMax() {
 			return message.NewCodeErr(message.InvalidTopicAlias, "topic alias is not allowed or too large")
 		}
 		svc.sess.AddTopicAlice(string(msg.Topic()), msg.TopicAlias())
 		Log.Debugf("%v save topic alice ==> topic：%v alice：%v", svc.cid(), msg.Topic(), msg.TopicAlias())
 		msg.SetTopicAlias(0)
+		return nil
+	}
+	if msg.TopicAlias() > svc.sess.TopicAliasMax() {
+		return message.NewCodeErr(message.InvalidTopicAlias, "beyond the max of topic alias")
 	}
 	return nil
 }
@@ -533,10 +536,11 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 	svc.rmsgs = svc.rmsgs[0:0]
 
 	for _, t := range tps {
+		tpc := string(t)
 		// 简单处理，直接断开连接，返回原因码
-		if svc.server.cfg.CloseShareSub && util.IsShareSub(string(t)) {
+		if svc.server.cfg.CloseShareSub && util.IsShareSub(tpc) {
 			return message.NewCodeErr(message.UnsupportedSharedSubscriptions)
-		} else if !svc.server.cfg.CloseShareSub && util.IsShareSub(string(t)) && msg.TopicNoLocal(t) {
+		} else if !svc.server.cfg.CloseShareSub && util.IsShareSub(tpc) && msg.TopicNoLocal(t) {
 			// 共享订阅时把非本地选项设为1将造成协议错误（Protocol Error）
 			return message.NewCodeErr(message.ProtocolError)
 		}
@@ -686,6 +690,7 @@ func (svc *service) processToCluster(topic [][]byte, msg message.Message) {
 
 // onPublish()在服务器接收到发布消息并完成时调用 ack循环。
 //此方法将根据发布获取订阅服务器列表主题，并将消息发布到订阅方列表。
+// 消息已经处理完过程消息了，准备进行广播发送
 func (svc *service) onPublish(msg *message.PublishMessage) error {
 	if msg.Retain() {
 		if err := svc.server.topicsMgr.Retain(msg); err != nil { // 为这个主题保存最后一条保留消息
@@ -709,7 +714,7 @@ func (svc *service) onPublish(msg *message.PublishMessage) error {
 	if svc.openShare() && buf != nil {
 		tmpMsg := message.NewPublishMessage() // 必须重新弄一个，防止被下面改动qos引起bug
 		tmpMsg.Decode(buf.Bytes())
-		svc.sendShareToCluster(tmpMsg) // todo 共享订阅时把非本地选项设为1将造成协议错误
+		svc.sendShareToCluster(tmpMsg)
 	}
 
 	// 发送非共享订阅主题, 这里面会改动qos
