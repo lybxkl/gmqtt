@@ -366,7 +366,7 @@ func (svc *service) unSubAll() {
 			Log.Errorf("(%s/%d): %v", svc.cid(), svc.id, err)
 		} else {
 			for _, t := range tpc {
-				if err = svc.server.topicsMgr.Unsubscribe([]byte(t.Topic), &svc.onpub); err != nil {
+				if err = svc.server.topicsMgr.Unsubscribe(t.Topic, &svc.onpub); err != nil {
 					Log.Errorf("(%s): Error unsubscribing topic %q: %v", svc.cid(), t, err)
 				}
 			}
@@ -430,14 +430,15 @@ func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnComple
 
 		var err2 error = nil
 
-		for i, t := range tps {
+		for i, tt := range tps {
+			t := tt
 			c := retcodes[i]
 
 			if c == message.QosFailure {
 				err2 = fmt.Errorf("Failed to subscribe to '%s'\n%v", string(t), err2)
 			} else {
 				err = svc.sess.AddTopic(topic.Sub{
-					Topic:             string(t),
+					Topic:             t,
 					Qos:               c,
 					NoLocal:           sub.TopicNoLocal(t),
 					RetainAsPublished: sub.TopicRetainAsPublished(t),
@@ -448,7 +449,7 @@ func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnComple
 					err2 = fmt.Errorf("Failed to subscribe to '%s' (%v)\n%v", string(t), err, err2)
 				}
 				_, err = svc.server.topicsMgr.Subscribe(topic.Sub{
-					Topic:             string(t),
+					Topic:             t,
 					Qos:               c,
 					NoLocal:           sub.TopicNoLocal(t),
 					RetainAsPublished: sub.TopicRetainAsPublished(t),

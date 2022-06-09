@@ -5,7 +5,7 @@ import (
 )
 
 type Sub struct {
-	Topic             string // 主题
+	Topic             []byte // 主题
 	Qos               byte   // qos
 	NoLocal           bool   // 非本地
 	RetainAsPublished bool

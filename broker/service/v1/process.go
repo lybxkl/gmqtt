@@ -518,7 +518,7 @@ func (svc *service) processPublish(msg *message.PublishMessage) error {
 	return message.NewCodeErr(message.UnsupportedQoSLevel, fmt.Sprintf("(%s) invalid message QoS %d.", svc.cid(), msg.QoS()))
 }
 
-// For SUBSCRIBE messagev5, we should add subscriber, then send back SUBACK
+// For SUBSCRIBE message, we should add subscriber, then send back SUBACK
 func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 
 	// 在编解码处已经限制了至少有一个主题过滤器/订阅选项对
@@ -536,7 +536,7 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 	svc.rmsgs = svc.rmsgs[0:0]
 
 	for _, t := range tps {
-		tpc := string(t)
+		tpc := t
 		// 简单处理，直接断开连接，返回原因码
 		if svc.server.cfg.CloseShareSub && util.IsShareSub(tpc) {
 			return message.NewCodeErr(message.UnsupportedSharedSubscriptions)
@@ -546,15 +546,16 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 		}
 	}
 
-	for i, t := range tps {
+	for i, tt := range tps {
+		t1 := tt
 		var (
-			noLocal           = msg.TopicNoLocal(t)
-			retainAsPublished = msg.TopicRetainAsPublished(t)
-			retainHandling    = msg.TopicRetainHandling(t)
+			noLocal           = msg.TopicNoLocal(t1)
+			retainAsPublished = msg.TopicRetainAsPublished(t1)
+			retainHandling    = msg.TopicRetainHandling(t1)
 		)
 
 		sub := topic.Sub{
-			Topic:             string(t),
+			Topic:             t1,
 			Qos:               qos[i],
 			NoLocal:           noLocal,
 			RetainAsPublished: retainAsPublished,
@@ -573,29 +574,29 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 		}
 		retcodes = append(retcodes, rqos)
 
-		if !util.IsShareSub(string(t)) { // 共享订阅不发送任何保留消息。
+		if !util.IsShareSub(t1) { // 共享订阅不发送任何保留消息。
 			//没有检查错误。如果有错误，我们不想订阅要停止，就return。
 			switch retainHandling {
 			case message.NoSendRetain:
 				break
 			case message.CanSendRetain:
-				err = svc.server.topicsMgr.Retained(t, &svc.rmsgs)
+				err = svc.server.topicsMgr.Retained(t1, &svc.rmsgs)
 				if err != nil {
 					return message.NewCodeErr(message.ServiceBusy, err.Error())
 				}
-				Log.Debugf("(%s) topic = %s, retained count = %d", svc.cid(), t, len(svc.rmsgs))
+				Log.Debugf("(%s) topic = %s, retained count = %d", svc.cid(), t1, len(svc.rmsgs))
 			case message.NoExistSubSendRetain:
 				// 已存在订阅的情况下不发送保留消息是很有用的，比如重连完成时客户端不确定订阅是否在之前的会话连接中被创建。
 				oldTp, _ := svc.sess.Topics()
 
 				existThisTopic := false
 				for jk := 0; jk < len(oldTp); jk++ {
-					if len(oldTp[jk].Topic) != len(t) {
+					if len(oldTp[jk].Topic) != len(t1) {
 						continue
 					}
 					otp := oldTp[jk].Topic
 					for jj := 0; jj < len(otp); jj++ {
-						if otp[jj] != t[jj] {
+						if otp[jj] != t1[jj] {
 							goto END
 						}
 					}
@@ -605,11 +606,11 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 				END:
 				}
 				if !existThisTopic {
-					err = svc.server.topicsMgr.Retained(t, &svc.rmsgs)
+					err = svc.server.topicsMgr.Retained(t1, &svc.rmsgs)
 					if err != nil {
 						return message.NewCodeErr(message.ServiceBusy, err.Error())
 					}
-					Log.Debugf("(%s) topic = %s, retained count = %d", svc.cid(), t, len(svc.rmsgs))
+					Log.Debugf("(%s) topic = %s, retained count = %d", svc.cid(), t1, len(svc.rmsgs))
 				}
 			}
 		}

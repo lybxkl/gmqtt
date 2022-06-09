@@ -481,7 +481,7 @@ func (server *Server) checkAndInitConfig() error {
 		server.authPlusAllows = auPlus
 		server.authMgr = auth.NewDefaultAuth()
 		server.sessMgr = sessimpl.NewMemManager()
-		server.topicsMgr = topicimpl.NewMemManager()
+		server.topicsMgr = topicimpl.NewMemProvider()
 
 		(server.sessMgr).(store.Store).SetStore(server.SessionStore, server.MessageStore)
 		(server.topicsMgr).(store.Store).SetStore(server.SessionStore, server.MessageStore)

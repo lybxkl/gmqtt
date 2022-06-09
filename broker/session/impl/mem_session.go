@@ -186,7 +186,7 @@ func (s *session) AddTopic(sub topic.Sub) error {
 		return fmt.Errorf("session not yet initialized")
 	}
 
-	s.topics[sub.Topic] = &sub
+	s.topics[string(sub.Topic)] = &sub
 
 	return nil
 }
@@ -372,7 +372,7 @@ func (s *session) SetSub(sub *message.SubscribeMessage) {
 	qos := sub.Qos()
 	for i := 0; i < len(tp); i++ {
 		_ = s.AddTopic(topic.Sub{
-			Topic:             string(tp[i]),
+			Topic:             tp[i],
 			Qos:               qos[i],
 			NoLocal:           sub.TopicNoLocal(tp[i]),
 			RetainAsPublished: sub.TopicRetainAsPublished(tp[i]),

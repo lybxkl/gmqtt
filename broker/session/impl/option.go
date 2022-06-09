@@ -25,7 +25,7 @@ func WithOldTopic(subs []topic.Sub) Option {
 	return func(s *session) {
 		for _, sub := range subs {
 			b := sub
-			s.topics[sub.Topic] = &b
+			s.topics[string(b.Topic)] = &b
 		}
 	}
 }
