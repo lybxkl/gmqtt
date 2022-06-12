@@ -216,6 +216,9 @@ func (server *Server) Close() error {
 			Log.Error(err.Error())
 		}
 	}
+	if server.cancel != nil {
+		server.cancel()
+	}
 	return nil
 }
 
