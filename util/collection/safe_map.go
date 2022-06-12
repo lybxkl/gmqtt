@@ -30,10 +30,27 @@ func NewSafeMap() *SafeMap {
 // Del deletes the value with the given key from m.
 func (m *SafeMap) Del(key interface{}) {
 	m.lock.Lock()
-	if _, ok := m.dirtyOld[key]; ok {
+	m.del(key)
+	m.lock.Unlock()
+}
+
+func (m *SafeMap) Dels(keys ...interface{}) {
+	m.lock.Lock()
+	for _, key := range keys {
+		m.del(key)
+	}
+	m.lock.Unlock()
+}
+
+func (m *SafeMap) del(key interface{}) (interface{}, bool) {
+	var (
+		old interface{}
+		ok  bool
+	)
+	if old, ok = m.dirtyOld[key]; ok {
 		delete(m.dirtyOld, key)
 		m.deletionOld++
-	} else if _, ok := m.dirtyNew[key]; ok {
+	} else if old, ok = m.dirtyNew[key]; ok {
 		delete(m.dirtyNew, key)
 		m.deletionNew++
 	}
@@ -53,7 +70,7 @@ func (m *SafeMap) Del(key interface{}) {
 		m.dirtyNew = make(map[interface{}]interface{})
 		m.deletionNew = 0
 	}
-	m.lock.Unlock()
+	return old, ok
 }
 
 // Get gets the value with the given key from m.
@@ -67,6 +84,11 @@ func (m *SafeMap) Get(key interface{}) (interface{}, bool) {
 
 	val, ok := m.dirtyNew[key]
 	return val, ok
+}
+
+func (m *SafeMap) ContainsKey(key interface{}) bool {
+	_, ok := m.Get(key)
+	return ok
 }
 
 // Set sets the value into m with the given key.
@@ -88,6 +110,46 @@ func (m *SafeMap) Set(key, value interface{}) {
 	m.lock.Unlock()
 }
 
+// GetOrSet ...获取，不存在即设置，返回最新或者旧的值，是否原来存在标识
+func (m *SafeMap) GetOrSet(key, value interface{}) (interface{}, bool) {
+	val, ok := m.Get(key)
+	if ok {
+		return val, true
+	}
+	m.lock.Lock()
+	if val, ok = m.dirtyOld[key]; ok {
+		return val, true
+	}
+
+	if val, ok = m.dirtyNew[key]; ok {
+		return val, true
+	}
+
+	if m.deletionOld <= maxDeletion {
+		if _, ok := m.dirtyNew[key]; ok {
+			delete(m.dirtyNew, key)
+			m.deletionNew++
+		}
+		m.dirtyOld[key] = value
+	} else {
+		if _, ok := m.dirtyOld[key]; ok {
+			delete(m.dirtyOld, key)
+			m.deletionOld++
+		}
+		m.dirtyNew[key] = value
+	}
+	m.lock.Unlock()
+	return value, false
+}
+
+// GetDel 获取并删除， 返回删除对象，是否存在
+func (m *SafeMap) GetDel(key interface{}) (interface{}, bool) {
+	m.lock.Lock()
+	old, ok := m.del(key)
+	m.lock.Unlock()
+	return old, ok
+}
+
 // Size returns the size of m.
 func (m *SafeMap) Size() int {
 	m.lock.RLock()
@@ -100,13 +162,15 @@ func (m *SafeMap) Range(fn func(k, v interface{}) error) (err error) {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 	for k, v := range m.dirtyOld {
-		err = fn(k, v)
+		k1, v1 := k, v
+		err = fn(k1, v1)
 		if err != nil {
 			return
 		}
 	}
 	for k, v := range m.dirtyNew {
-		err = fn(k, v)
+		k1, v1 := k, v
+		err = fn(k1, v1)
 		if err != nil {
 			return
 		}

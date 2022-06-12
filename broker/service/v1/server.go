@@ -514,8 +514,8 @@ func (server *Server) initMiddleware(option ...middleware.Option) {
 func (server *Server) initStore() {
 	switch {
 	default:
-		server.SessionStore = storeimpl.NewSessStore()
-		server.MessageStore = storeimpl.NewMsgStore()
+		server.SessionStore = storeimpl.NewMemSessStore()
+		server.MessageStore = storeimpl.NewMemMsgStore()
 	}
 
 	util.MustPanic(server.SessionStore.Start(server.ctx, server.cfg))

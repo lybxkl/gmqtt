@@ -13,7 +13,7 @@ type SessionStore interface {
 	GetSession(ctx context.Context, clientId string) (sess.Session, error)
 	StoreSession(ctx context.Context, clientId string, session sess.Session) error
 	ClearSession(ctx context.Context, clientId string, clearOfflineMsg bool) error
-	StoreSubscription(ctx context.Context, clientId string, subscription *message.SubscribeMessage) error
+	StoreSubscription(ctx context.Context, clientId string, subMsg *message.SubscribeMessage) error
 	DelSubscription(ctx context.Context, client, topic string) error
 	ClearSubscriptions(ctx context.Context, clientId string) error
 	GetSubscriptions(ctx context.Context, clientId string) ([]*message.SubscribeMessage, error)
