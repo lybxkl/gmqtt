@@ -48,7 +48,9 @@ func GetServerName() string {
 }
 
 type Server struct {
-	cfg *config.GConfig
+	ctx    context.Context
+	cancel func()
+	cfg    *config.GConfig
 
 	// authMgr是我们将用于身份验证的认证管理器
 	authMgr auth.Manager
@@ -64,7 +66,8 @@ type Server struct {
 	//服务器的退出通道。如果服务器检测到该通道 是关闭的，那么它也是一个关闭的信号。
 	quit chan struct{}
 
-	ln net.Listener
+	ln  net.Listener
+	uri *url.URL
 
 	//服务器创建的服务列表。我们跟踪他们，这样我们就可以
 	//当服务器宕机时，如果它们仍然存在，那么可以优雅地关闭它们。
@@ -87,8 +90,23 @@ type Server struct {
 	middleware middleware.Options
 }
 
-func NewServer(cfg *config.GConfig) *Server {
-	return &Server{cfg: cfg}
+func NewServer(cfg *config.GConfig, uri string) *Server {
+	ctx, cancel := context.WithCancel(context.Background())
+	u, err := url.Parse(uri)
+	if err != nil {
+		panic(err)
+	}
+	return &Server{
+		ctx:        ctx,
+		cancel:     cancel,
+		cfg:        cfg,
+		quit:       make(chan struct{}),
+		uri:        u,
+		svcs:       collection.NewSafeMap(),
+		configOnce: sync.Once{},
+		subs:       make([]interface{}, 0),
+		qoss:       make([]byte, 0),
+	}
 }
 
 // ListenAndServe 监听请求的URI上的连接，并处理任何连接
@@ -96,36 +114,28 @@ func NewServer(cfg *config.GConfig) *Server {
 //或者有一些关键的错误导致服务器停止运行。
 //URI 提供的格式应该是“protocol://host:port”，可以通过它进行解析 url.Parse ()。
 //例如，URI可以是“tcp://0.0.0.0:1883”。
-func (server *Server) ListenAndServe(uri string) error {
+func (server *Server) ListenAndServe() error {
+	var err error
 	defer atomic.CompareAndSwapInt32(&server.running, 1, 0)
-
 	// 防止重复启动
 	if !atomic.CompareAndSwapInt32(&server.running, 0, 1) {
 		return fmt.Errorf("server/ListenAndServe: Server is already running")
 	}
 
-	server.quit = make(chan struct{})
-
-	u, err := url.Parse(uri)
-	if err != nil {
-		return err
-	}
-
-	//这个是配置各种钩子，比如账号认证钩子
+	// 配置各种钩子，比如账号认证钩子
 	err = server.checkAndInitConfig()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	var tempDelay time.Duration // 接受失败要睡多久，默认5ms，最大1s
 
-	server.ln, err = net.Listen(u.Scheme, u.Host) // 监听连接
+	server.ln, err = net.Listen(server.uri.Scheme, server.uri.Host) // 监听连接
 	if err != nil {
 		return err
 	}
-	defer server.ln.Close() // nolint: errcheck
 
-	Log.Infof("AddMQTTHandler uri=%v", uri)
+	Log.Infof("AddMQTTHandler uri=%v", server.uri.String())
 	for {
 		conn, err := server.ln.Accept()
 
@@ -134,21 +144,13 @@ func (server *Server) ListenAndServe(uri string) error {
 			select {
 			case <-server.quit: //关闭服务器
 				return nil
-
 			default:
 			}
 
 			// Borrowed from go1.3.3/src/pkg/net/http/server.go:1699
 			// 暂时的错误处理
 			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				if tempDelay == 0 {
-					tempDelay = 5 * time.Millisecond
-				} else {
-					tempDelay *= 2
-				}
-				if max := 1 * time.Second; tempDelay > max {
-					tempDelay = max
-				}
+				tempDelay = reset(tempDelay)
 				Log.Errorf("Accept error: %v; retrying in %v", err, tempDelay)
 				time.Sleep(tempDelay)
 				continue
@@ -467,10 +469,6 @@ func (server *Server) checkAndInitConfig() error {
 			server.cfg.TimeoutRetries = consts.TimeoutRetries
 		}
 
-		server.svcs = collection.NewSafeMap()
-		server.subs = make([]interface{}, 0)
-		server.qoss = make([]byte, 0)
-
 		// store
 		server.initStore()
 
@@ -516,9 +514,9 @@ func (server *Server) initStore() {
 		server.SessionStore = storeimpl.NewSessStore()
 		server.MessageStore = storeimpl.NewMsgStore()
 	}
-	ctx := context.Background()
-	util.MustPanic(server.SessionStore.Start(ctx, server.cfg))
-	util.MustPanic(server.MessageStore.Start(ctx, server.cfg))
+
+	util.MustPanic(server.SessionStore.Start(server.ctx, server.cfg))
+	util.MustPanic(server.MessageStore.Start(server.ctx, server.cfg))
 }
 
 // 运行集群
@@ -626,4 +624,16 @@ func printBanner(serverVersion string) {
 		"*             ░     ░ ░      ░  ░\n" +
 		"*/" +
 		"服务器准备就绪: server is ready... version: " + serverVersion)
+}
+
+func reset(tempDelay time.Duration) time.Duration {
+	if tempDelay == 0 {
+		tempDelay = 5 * time.Millisecond
+	} else {
+		tempDelay *= 2
+	}
+	if max := 1 * time.Second; tempDelay > max {
+		tempDelay = max
+	}
+	return tempDelay
 }

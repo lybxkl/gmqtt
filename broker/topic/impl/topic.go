@@ -39,6 +39,7 @@ func NewMemProvider() *memtopic {
 	return &memtopic{
 		sroot: newSNode(),
 		rroot: newRNode(),
+		sys:   sys.NewMemProvider(),
 		share: share.NewMemProvider(),
 	}
 }
