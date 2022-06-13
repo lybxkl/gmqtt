@@ -24,6 +24,15 @@ const (
 	ErrorLevel
 )
 
+func ToLevel(level string) Level {
+	return map[string]Level{
+		"debug": DebugLevel,
+		"info":  InfoLevel,
+		"warn":  WarnLevel,
+		"error": ErrorLevel,
+	}[level]
+}
+
 var (
 	once sync.Once
 	Log  Logger
@@ -73,12 +82,12 @@ func NewGLog(level Level) Logger {
 		// 构建日志
 		log, err := config.Build()
 		if err != nil {
-			panic(fmt.Sprintf("log 初始化失败: %v", err))
+			panic(fmt.Errorf("log 初始化失败: %v", err))
 		}
-		Log.Info("log 初始化成功", zap.Time("runTime", time.Now()))
 		Log = &_log{
 			log.Sugar(),
 		}
+		Log.Info("log 初始化成功", zap.Time("runTime", time.Now()))
 	})
 	return Log
 }

@@ -2,11 +2,40 @@ package config
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+
+	"github.com/BurntSushi/toml"
 )
 
-var gConfig GConfig
+//go:embed config.toml
+var CfgFile []byte
+
+var gConfig *GConfig
+
+func GetGCfg() *GConfig {
+	return gConfig
+}
+
+func init() {
+	if len(CfgFile) == 0 {
+		panic(errors.New("not found config.toml"))
+	}
+	gConfig = &GConfig{}
+	gConfig.Broker.RetainAvailable = true
+
+	if err := toml.Unmarshal(CfgFile, gConfig); err != nil {
+		panic(err)
+	}
+
+	if gConfig.Broker.MaxQos > 2 || gConfig.Broker.MaxQos < 1 {
+		gConfig.Broker.MaxQos = 2
+	}
+
+	fmt.Println(gConfig.String())
+}
 
 type GConfig struct {
 	Version string `toml:"version"`
@@ -15,6 +44,7 @@ type GConfig struct {
 	Auth    `toml:"auth"`
 	Server  `toml:"server"`
 	PProf   `toml:"pprof"`
+	Log     `toml:"log"`
 }
 
 func (cfg *GConfig) String() string {

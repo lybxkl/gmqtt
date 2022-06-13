@@ -1,0 +1,117 @@
+serverVersion = "5.0.1"
+
+[log]
+    level = "debug"
+
+[broker]
+    # broker 监听的addr
+    mqttAddr = "tcp://:1883"
+    # 是否开启tls
+    mqttTlsOpen = false
+
+
+    # 开启websocket监听的addr
+    wsAddr = ":8765"
+    # websocket的path
+    wsPath = "/mqtt"
+
+    wssAddr=":8762"
+    wssCertPath=""
+    wssKeyPath=""
+
+    # 根证书
+    ca = "certs/root.crt"
+
+    closeShareSub = false # 关闭共享订阅
+
+    max_qos = 1
+    retain_available = false
+    max_packet_size = 400
+
+[cluster]
+    # 是否开启集群模式
+    enabled = false
+    model = "mysql" # getty 集群启动方式，目前支持mongo、mysql和getty
+    taskClusterPoolSize=1000 # 节点处理其它节点发来的消息的协程池大小
+    taskServicePoolSize=1000 # 服务向其它节点发送的协程池大小
+
+    # 当前节点再集群中的名称，必须保证每个节点的名称都不一样
+    clusterName = "node2"
+    subMinNum = 40 # sub表 最小保持数据
+    autoPeriod = 5 # 单位s 自动合并周期
+    lockTimeOut = 10 # 单位s 锁超时时间
+    lockAddLive = 5 # 每次锁续命时间 单位 s
+    compressProportion = 0.75 # 每次获取所有数据的百分比数据进行处理
+
+    ## 下面是Mongo,mysql集群方式配置
+    mongoUrl = "mongodb://127.0.0.1:27017"
+    mongoMinPool = 50
+    mongoMaxPool = 150
+    mongoMaxConnIdleTime = 10 ## 单位s
+    mysqlUrl = "root:root@(127.0.0.1:3306)/simq?charset=utf8mb4&parseTime=True&loc=Local"
+    mysqlMaxPool = 100
+    period = 200 ## 数据拉取周期，单位ms， tips: 太小了会导致 在数据库插入数据和拉取数据的位置相近导致数据有些没拉到就跳过了, mongo难搞一点
+    batchSize = 100 ## 单次获取数据量大小
+    ## mongo end
+
+    ## 下面是getty方式启动需要配置
+    # 集群模式监听的IP，用来和集群中其他节点通信
+    clusterHost = "127.0.0.1"
+    # 集群模式监听的端口
+    clusterPort = 2885
+    clientConNum = 100 ## 客户端连接数
+    # 集群模式是否使用tls
+    # clusterTls = false
+    # 服务器端证书
+    # serverCertFile = "certs/server.crt"
+    # 服务器端秘钥
+    # serverKeyFile = "certs/server.key"
+    # 客户端证书，如果集群节点通信开启了tls时需要使用
+    # clientCertFile = "certs/client.crt"
+    # 客户端秘钥
+    # clientKeyFile = "certs/client.key"
+    [[cluster.staticNodeList]]
+        name="node1"
+        addr= "127.0.0.1:2884"
+    [[cluster.staticNodeList]]
+        name="node2"
+        addr= "127.0.0.1:2885"
+    [[cluster.staticNodeList]]
+        name="node3"
+        addr= "127.0.0.1:2886"
+    ## getty end
+[defaultConfig]
+    [defaultConfig.connect]
+        keepalive=300 # 单位s，可以作为读超时
+        writeTimeout = 3 # 单位s, 写超时
+        readTimeout = 3
+        connectTimeout=2 # 单位s
+        ackTimeout=20 #单位s
+        timeOutRetries=3 # 超时重试次数
+    [defaultConfig.provider]
+        sessionsProvider=""
+        topicsProvider=""
+        authenticator="" # 不填则会采用默认，开启身份验证的验证钩子，可选【"default","mysql","redis"】
+    [defaultConfig.auth]
+        allows = [""]
+    [defaultConfig.server]
+        redirects = ["127.0.0.1:2883","myserver.xyz.org","myserver.xyz.org:8883","[fe80::9610:3eff:fe1c]:1883"]
+        redirectIsForEver = true # 临时还是永久
+        redirectOpen = false # 开关
+[store]
+    model = ""
+    [store.mongo]
+        source = "mongodb://127.0.0.1:27017"
+        minPool = 50
+        maxPool = 150
+        maxConnIdleTime = 10 ## 单位s
+    [store.mysql]
+        source = "root:root@(127.0.0.1:3306)/simq?charset=utf8mb4&parseTime=True&loc=Local"
+        poolSize=100
+    [store.redis]
+        source=""
+        db=1
+        poolSize=10
+[pprof]
+    port = 8080
+    open = false
