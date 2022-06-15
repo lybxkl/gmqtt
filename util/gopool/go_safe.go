@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/lybxkl/gmqtt/util/runtimex"
+	. "github.com/lybxkl/gmqtt/common/log"
 )
 
 // GoSafe runs the given fn using another goroutine, recovers if fn panics.
@@ -27,7 +27,10 @@ func RoutineId() uint64 {
 
 // RunSafe runs the given fn, recovers if fn panics.
 func RunSafe(fn func()) {
-	defer runtimex.Recover()
-
+	defer func() {
+		if err := recover(); err != nil {
+			Log.Errorf("recover: %+v", err)
+		}
+	}()
 	fn()
 }

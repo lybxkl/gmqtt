@@ -2,7 +2,7 @@ package service
 
 import (
 	"fmt"
-	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 
@@ -52,7 +52,7 @@ type service struct {
 	// 非规范：服务端可以把那些没有发送就被丢弃的报文放在死信队列 上，或者执行其他诊断操作。具体的操作超出了5.0规范的范围。
 	// maxPackageSize int
 
-	conn io.ReadWriteCloser
+	conn net.Conn
 
 	// sess是这个MQTT会话的会话对象。它跟踪会话变量
 	//比如ClientId, KeepAlive，用户名等

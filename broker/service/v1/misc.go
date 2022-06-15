@@ -12,10 +12,10 @@ import (
 	"github.com/lybxkl/gmqtt/util/bufpool"
 )
 
-func getConnectMessage(conn io.Closer) (*message.ConnectMessage, error) {
+func getConnectMessage(conn io.Reader) (*message.ConnectMessage, error) {
 	buf, err := getMessageBuffer(conn)
 	if err != nil {
-		//glog.Logger.Debug("Receive error: %v", err)
+		//Log.Debug("Receive error: %v", err)
 		return nil, err
 	}
 
@@ -27,7 +27,7 @@ func getConnectMessage(conn io.Closer) (*message.ConnectMessage, error) {
 }
 
 // 获取增强认证数据，或者connack数据
-func getAuthMessageOrOther(conn io.Closer) (message.Message, error) {
+func getAuthMessageOrOther(conn io.Reader) (message.Message, error) {
 	buf, err := getMessageBuffer(conn)
 	if err != nil {
 		//glog.Logger.Debug("Receive error: %v", err)
@@ -62,7 +62,7 @@ func getAuthMessageOrOther(conn io.Closer) (message.Message, error) {
 	}
 }
 
-func getConnackMessage(conn io.Closer) (*message.ConnackMessage, error) {
+func getConnackMessage(conn io.Reader) (*message.ConnackMessage, error) {
 	buf, err := getMessageBuffer(conn)
 	if err != nil {
 		//glog.Logger.Debug("Receive error: %v", err)
@@ -91,13 +91,8 @@ func writeMessage(conn io.Writer, msg message.Message) error {
 	return writeMessageBuffer(conn, buf.Bytes())
 }
 
-func getMessageBuffer(c io.Closer) ([]byte, error) {
-	if c == nil {
-		return nil, ErrInvalidConnectionType
-	}
-
-	conn, ok := c.(net.Conn)
-	if !ok {
+func getMessageBuffer(conn io.Reader) ([]byte, error) {
+	if conn == nil {
 		return nil, ErrInvalidConnectionType
 	}
 
@@ -155,13 +150,8 @@ func getMessageBuffer(c io.Closer) ([]byte, error) {
 	return buf, nil
 }
 
-func writeMessageBuffer(c io.Writer, b []byte) error {
-	if c == nil {
-		return ErrInvalidConnectionType
-	}
-
-	conn, ok := c.(net.Conn)
-	if !ok {
+func writeMessageBuffer(conn io.Writer, b []byte) error {
+	if conn == nil {
 		return ErrInvalidConnectionType
 	}
 

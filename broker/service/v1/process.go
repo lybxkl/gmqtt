@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"reflect"
 	"time"
 
@@ -54,7 +53,7 @@ func (svc *service) processor() {
 		mtype, total, err := svc.peekMessageSize()
 		if err != nil {
 			if err != io.EOF {
-				Log.Errorf("(%s) Error peeking next messagev5 size", svc.cid())
+				Log.Errorf("(%s) Error peeking next message size", svc.cid())
 			}
 			return
 		}
@@ -173,7 +172,7 @@ func (svc *service) sendByConn(msg message.Message) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return svc.conn.(net.Conn).Write(b)
+	return svc.conn.Write(b)
 }
 
 func (svc *service) processIncoming(msg message.Message) error {

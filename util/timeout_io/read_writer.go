@@ -6,8 +6,8 @@ import (
 )
 
 type Conn struct {
-	d    time.Duration
-	conn net.Conn
+	d time.Duration
+	net.Conn
 }
 
 type Writer struct {
@@ -22,32 +22,32 @@ func NewWriter(conn net.Conn, deadline time.Duration) *Writer {
 	return &Writer{
 		Conn{
 			d:    deadline,
-			conn: conn,
+			Conn: conn,
 		},
 	}
 }
 
 func (r *Writer) Write(b []byte) (int, error) {
-	if err := r.conn.SetWriteDeadline(time.Now().Add(r.d)); err != nil {
+	if err := r.Conn.SetWriteDeadline(time.Now().Add(r.d)); err != nil {
 		return 0, err
 	}
-	return r.conn.Write(b)
+	return r.Conn.Write(b)
 }
 
 func NewReader(conn net.Conn, deadline time.Duration) *Reader {
 	return &Reader{
 		Conn{
 			d:    deadline,
-			conn: conn,
+			Conn: conn,
 		},
 	}
 }
 
 func (r *Reader) Read(b []byte) (int, error) {
-	if err := r.conn.SetReadDeadline(time.Now().Add(r.d)); err != nil {
+	if err := r.Conn.SetReadDeadline(time.Now().Add(r.d)); err != nil {
 		return 0, err
 	}
-	return r.conn.Read(b)
+	return r.Conn.Read(b)
 }
 
 type ReadWriteCloser struct {

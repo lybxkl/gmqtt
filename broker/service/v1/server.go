@@ -223,22 +223,17 @@ func (server *Server) Close() error {
 }
 
 // handleConnection 用于代理处理来自客户机的传入连接
-func (server *Server) handleConnection(c io.Closer) (err error) {
-	if c == nil {
+func (server *Server) handleConnection(conn net.Conn) (err error) {
+	if conn == nil {
 		return ErrInvalidConnectionType
 	}
 
 	defer func() {
-		if err != nil && c != nil {
+		if err != nil && conn != nil {
 			time.Sleep(10 * time.Millisecond)
-			_ = c.Close()
+			_ = conn.Close()
 		}
 	}()
-
-	conn, ok := c.(net.Conn)
-	if !ok {
-		return ErrInvalidConnectionType
-	}
 
 	//要建立联系，我们必须
 	// 1.读并解码信息从连接线上的ConnectMessage
@@ -544,6 +539,7 @@ func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *m
 
 	cid := string(req.ClientId())
 	var s sess.Session
+	s, _ = sessimpl.NewMemSession(req)
 	//如果没有设置清除会话，请检查会话存储是否存在会话。
 	//如果找到，返回。
 	// TODO 通知其它节点断开那边的该客户端ID的连接，如果有的话

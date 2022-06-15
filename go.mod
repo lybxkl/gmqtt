@@ -5,6 +5,9 @@ go 1.16
 require (
 	github.com/BurntSushi/toml v1.1.0
 	github.com/bsm/ratelimit v2.0.0+incompatible
+	github.com/go-playground/locales v0.14.0
+	github.com/go-playground/universal-translator v0.18.0
+	github.com/go-playground/validator/v10 v10.11.0
 	github.com/onsi/ginkgo v1.16.5 // indirect
 	github.com/onsi/gomega v1.19.0 // indirect
 	github.com/panjf2000/ants/v2 v2.4.6
