@@ -1,4 +1,4 @@
-package consts
+package constant
 
 const (
 	// MWC is the multi-level wildcard

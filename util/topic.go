@@ -2,6 +2,8 @@ package util
 
 import (
 	"bytes"
+
+	"github.com/lybxkl/gmqtt/common/constant"
 )
 
 var (
@@ -30,4 +32,12 @@ func IsShareSub(topic []byte) bool {
 // IsSysSub 判断是否系统主题前缀
 func IsSysSub(topic []byte) bool {
 	return bytes.HasPrefix(topic, sysPrefix)
+}
+
+// Qos 计算服务支持最大qos
+func Qos(qos byte) byte {
+	if qos > constant.MaxQosAllowed {
+		qos = constant.MaxQosAllowed
+	}
+	return qos
 }

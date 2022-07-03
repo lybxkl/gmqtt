@@ -11,7 +11,7 @@ import (
 	"github.com/lybxkl/gmqtt/broker/topic"
 	"github.com/lybxkl/gmqtt/broker/topic/impl/share"
 	"github.com/lybxkl/gmqtt/broker/topic/impl/sys"
-	consts "github.com/lybxkl/gmqtt/common/constant"
+	"github.com/lybxkl/gmqtt/common/constant"
 	"github.com/lybxkl/gmqtt/util"
 )
 
@@ -58,9 +58,7 @@ func (t *memtopic) Subscribe(subs topic.Sub, sub interface{}) (byte, error) {
 		return message.QosFailure, fmt.Errorf("subscriber cannot be nil")
 	}
 
-	if subs.Qos > consts.MaxQosAllowed {
-		subs.Qos = consts.MaxQosAllowed
-	}
+	subs.Qos = util.Qos(subs.Qos)
 
 	// 系统主题订阅
 	if util.IsSysSub(subs.Topic) {
@@ -392,9 +390,9 @@ func (t *snode) smatch(topic []byte, qos byte, subs *[]interface{}, qoss *[]topi
 	level := string(ntl)
 	for k, n := range t.snodes {
 		// If the key is "#", then these subscribers are added to the result set
-		if k == consts.MWC {
+		if k == constant.MWC {
 			n.matchQos(qos, subs, qoss)
-		} else if k == consts.SWC || k == level {
+		} else if k == constant.SWC || k == level {
 			if rem != nil {
 				if err := n.smatch(rem, qos, subs, qoss); err != nil {
 					return err
@@ -539,10 +537,10 @@ func (t *rnode) rmatch(topic []byte, msgs *[]*message.PublishMessage) error {
 
 	level := string(ntl)
 
-	if level == consts.MWC {
+	if level == constant.MWC {
 		// If '#', add all retained messages starting t node
 		t.allRetained(msgs)
-	} else if level == consts.SWC {
+	} else if level == constant.SWC {
 		// If '+', check all nodes at t level. Next levels must be matched.
 		for _, n := range t.rnodes {
 			if err := n.rmatch(rem, msgs); err != nil {
@@ -574,19 +572,19 @@ func (t *rnode) allRetained(msgs *[]*message.PublishMessage) {
 // Returns topic level, remaining topic levels and any errors
 //返回主题级别、剩余的主题级别和任何错误
 func nextTopicLevel(topic []byte) ([]byte, []byte, error) {
-	s := consts.StateCHR
+	s := constant.StateCHR
 
 	//遍历topic，判断是何种类型的主题
 	for i, c := range topic {
 		switch c {
 		case '/':
-			if s == consts.StateMWC {
+			if s == constant.StateMWC {
 				//多层次通配符发现的主题，它不是在最后一层
 				return nil, nil, fmt.Errorf("memtopic/nextTopicLevel: Multi-level wildcard found in topic and it's not at the last level")
 			}
 
 			if i == 0 {
-				return []byte(consts.SWC), topic[i+1:], nil
+				return []byte(constant.SWC), topic[i+1:], nil
 			}
 
 			return topic[:i], topic[i+1:], nil
@@ -597,7 +595,7 @@ func nextTopicLevel(topic []byte) ([]byte, []byte, error) {
 				return nil, nil, fmt.Errorf("memtopic/nextTopicLevel: Wildcard character '#' must occupy entire topic level")
 			}
 
-			s = consts.StateMWC
+			s = constant.StateMWC
 
 		case '+':
 			if i != 0 {
@@ -605,7 +603,7 @@ func nextTopicLevel(topic []byte) ([]byte, []byte, error) {
 				return nil, nil, fmt.Errorf("memtopic/nextTopicLevel: Wildcard character '+' must occupy entire topic level")
 			}
 
-			s = consts.StateSWC
+			s = constant.StateSWC
 
 		case '$':
 			if i == 0 {
@@ -613,15 +611,15 @@ func nextTopicLevel(topic []byte) ([]byte, []byte, error) {
 				return nil, nil, fmt.Errorf("memtopic/nextTopicLevel: Cannot publish to $ topicv5")
 			}
 
-			s = consts.StateSYS
+			s = constant.StateSYS
 
 		default:
-			if s == consts.StateMWC || s == consts.StateSWC {
+			if s == constant.StateMWC || s == constant.StateSWC {
 				//通配符“#”和“+”必须占据整个主题级别
 				return nil, nil, fmt.Errorf("memtopic/nextTopicLevel: Wildcard characters '#' and '+' must occupy entire topic level")
 			}
 
-			s = consts.StateCHR
+			s = constant.StateCHR
 		}
 	}
 

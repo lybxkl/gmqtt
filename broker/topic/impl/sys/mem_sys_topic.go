@@ -9,6 +9,7 @@ import (
 	"github.com/lybxkl/gmqtt/broker/message"
 	"github.com/lybxkl/gmqtt/broker/topic"
 	consts "github.com/lybxkl/gmqtt/common/constant"
+	"github.com/lybxkl/gmqtt/util"
 )
 
 var _ TopicProvider = (*memTopics)(nil)
@@ -41,9 +42,7 @@ func (node *memTopics) Subscribe(subs topic.Sub, sub interface{}) (byte, error) 
 	node.smu.Lock()
 	defer node.smu.Unlock()
 
-	if subs.Qos > consts.MaxQosAllowed {
-		subs.Qos = consts.MaxQosAllowed
-	}
+	subs.Qos = util.Qos(subs.Qos)
 
 	if err := node.sroot.sinsert(subs, sub); err != nil {
 		return message.QosFailure, err
