@@ -5,9 +5,15 @@ import (
 )
 
 type Sub struct {
-	Topic             []byte // 主题
-	Qos               byte   // qos
-	NoLocal           bool   // 非本地
+	Topic []byte // 主题
+	Qos   byte   // qos
+	// 非本地
+	// 值为 1，表示应用消息不能被转发给发布此消息的客户 标识符 [MQTT-3.8.3-3]。
+	// 共享订阅时把非本地选项设为 1 将造成协议错误（Protocol Error）
+	NoLocal bool
+	// 发布保留（Retain As Published）选项。
+	// 值为 1，表示向此订阅转发应用消息时 保持消息被发布时设置的保留（RETAIN）标志。
+	// 值为 0，表示向此订阅转发应用消息时把保留标志设置为 0。
 	RetainAsPublished bool
 	RetainHandling    message.RetainHandling
 	SubIdentifier     uint32 // 订阅标识符

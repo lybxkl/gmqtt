@@ -1,7 +1,6 @@
 package impl
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"reflect"
@@ -13,6 +12,7 @@ import (
 	"github.com/lybxkl/gmqtt/broker/topic/impl/share"
 	"github.com/lybxkl/gmqtt/broker/topic/impl/sys"
 	consts "github.com/lybxkl/gmqtt/common/constant"
+	"github.com/lybxkl/gmqtt/util"
 )
 
 var _ topic.Manager = (*memtopic)(nil)
@@ -44,18 +44,6 @@ func NewMemProvider() *memtopic {
 	}
 }
 
-var (
-	shareByte = []byte("$share/")
-	sysByte   = []byte("$sys/")
-
-	deepEqual = func(topic []byte) bool {
-		return bytes.HasPrefix(topic, shareByte)
-	}
-	deepSysEqual = func(topic []byte) bool {
-		return bytes.HasPrefix(topic, sysByte)
-	}
-)
-
 func (t *memtopic) SetStore(_ store.SessionStore, messageStore store.MessageStore) {
 	t.messageStore = messageStore
 }
@@ -75,15 +63,15 @@ func (t *memtopic) Subscribe(subs topic.Sub, sub interface{}) (byte, error) {
 	}
 
 	// 系统主题订阅
-	if len(subs.Topic) > len(sysByte) && deepSysEqual(subs.Topic) {
-		subs.Topic = subs.Topic[len(sysByte):]
+	if util.IsSysSub(subs.Topic) {
+		subs.Topic = subs.Topic[util.SysTopicPrefixLen():]
 		return t.sys.Subscribe(subs, sub)
 	}
 	// 共享主题订阅
-	if len(subs.Topic) > len(shareByte) && deepEqual(subs.Topic) {
-		var index = len(shareByte)
+	if util.IsShareSub(subs.Topic) {
+		var index = util.ShareTopicPrefixLen()
 		// 找到共享主题名称
-		for i, b := range subs.Topic[len(shareByte):] {
+		for i, b := range subs.Topic[util.ShareTopicPrefixLen():] {
 			if b == '/' {
 				index += i
 				break
@@ -92,7 +80,7 @@ func (t *memtopic) Subscribe(subs topic.Sub, sub interface{}) (byte, error) {
 				return message.QosFailure, fmt.Errorf("not allowed '+' or '#' in the {share_name}")
 			}
 		}
-		if index == len(shareByte) {
+		if index == util.ShareTopicPrefixLen() {
 			return message.QosFailure, fmt.Errorf("topic format error")
 		}
 		// 必须share name 和topic 都不为空
@@ -100,7 +88,7 @@ func (t *memtopic) Subscribe(subs topic.Sub, sub interface{}) (byte, error) {
 			//shareName := string(topic[len(shareByte) : index])
 			// TODO 注册共享订阅到redis
 			//redis.SubShare(string(topic[index+1:]), string(topic[len(shareByte):index]), nodeName)
-			shareName := subs.Topic[len(shareByte):index]
+			shareName := subs.Topic[util.ShareTopicPrefixLen():index]
 			subs.Topic = subs.Topic[index+1:]
 			return t.share.Subscribe(shareName, subs, sub)
 		} else {
@@ -119,14 +107,14 @@ func (t *memtopic) Subscribe(subs topic.Sub, sub interface{}) (byte, error) {
 // Unsubscribe 取消订阅
 func (t *memtopic) Unsubscribe(topic []byte, sub interface{}) error {
 	// 系统主题的取消
-	if len(topic) > len(sysByte) && deepSysEqual(topic) {
-		return t.sys.Unsubscribe(topic[len(sysByte):], sub)
+	if util.IsSysSub(topic) {
+		return t.sys.Unsubscribe(topic[util.SysTopicPrefixLen():], sub)
 	}
 	// 共享主题的取消
-	if len(topic) > len(shareByte) && deepEqual(topic) {
-		var index = len(shareByte)
+	if util.IsShareSub(topic) {
+		var index = util.ShareTopicPrefixLen()
 		// 找到共享主题名称
-		for i, b := range topic[len(shareByte):] {
+		for i, b := range topic[util.ShareTopicPrefixLen():] {
 			if b == '/' {
 				index += i
 				break
@@ -134,14 +122,14 @@ func (t *memtopic) Unsubscribe(topic []byte, sub interface{}) error {
 				return fmt.Errorf("not allowed '+' or '#' in the {share_name}")
 			}
 		}
-		if index == len(shareByte) {
+		if index == util.ShareTopicPrefixLen() {
 			return fmt.Errorf("topic format error")
 		}
 		if len(topic) >= 2+index && topic[index] == '/' {
 			//shareName := string(topic[len(shareByte) : index+len(shareByte)])
 			// TODO 取消注册共享订阅到redis
 			//redis.UnSubShare(string(topic[index+1:]), string(topic[len(shareByte):index]), nodeName)
-			return t.share.Unsubscribe(topic[index+1:], topic[len(shareByte):index], sub)
+			return t.share.Unsubscribe(topic[index+1:], topic[util.ShareTopicPrefixLen():index], sub)
 		}
 	}
 
@@ -167,8 +155,8 @@ func (t *memtopic) Subscribers(topic []byte, qos byte, subs *[]interface{}, qoss
 	*subs = (*subs)[0:0]
 	*qoss = (*qoss)[0:0]
 	if svc { // 服务发来的 系统主题 消息
-		if len(topic) > 0 && deepSysEqual(topic) {
-			return t.sys.Subscribers(topic[len(sysByte):], qos, subs, qoss)
+		if util.IsSysSub(topic) {
+			return t.sys.Subscribers(topic[util.SysTopicPrefixLen():], qos, subs, qoss)
 		}
 		return fmt.Errorf("memtopic/Subscribers: Publish error message to $sys/ topic")
 	}

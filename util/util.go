@@ -1,7 +1,6 @@
 package util
 
 import (
-	"bytes"
 	"os"
 	"reflect"
 	"strings"
@@ -86,10 +85,4 @@ func Equal(k1, k2 interface{}) bool {
 	}
 
 	return false
-}
-
-var share = []byte("$share/")
-
-func IsShareSub(topic []byte) bool {
-	return len(topic) > 6 && bytes.HasPrefix(topic, share)
 }

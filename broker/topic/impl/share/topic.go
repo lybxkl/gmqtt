@@ -5,6 +5,7 @@ import (
 	"github.com/lybxkl/gmqtt/broker/topic"
 )
 
+// TopicProvider 共享订阅 没有 保留消息
 type TopicProvider interface {
 	Subscribe(shareName []byte, sub topic.Sub, subscriber interface{}) (byte, error)
 	Unsubscribe(topic, shareName []byte, subscriber interface{}) error

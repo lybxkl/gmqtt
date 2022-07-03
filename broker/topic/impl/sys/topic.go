@@ -6,7 +6,7 @@ import (
 	"github.com/lybxkl/gmqtt/broker/topic"
 )
 
-var UnSupportTopic = errors.New("the system theme is not supported")
+var UnSupportTopic = errors.New("the system topic is not supported")
 
 // TopicProvider 系统主题
 type TopicProvider interface {
