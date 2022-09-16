@@ -330,7 +330,7 @@ func (svc *service) sendWillMsg() {
 			Data:     willMsg,
 			Fn: func(data interface{}) {
 				Log.Debugf("%s send will message", svc.cid())
-				// 发送，只需要发送本地，集群的化，内部实现处理获取消息
+				// 发送，只需要发送本地，集群的话，内部实现处理获取消息
 				svc.pubFn(data.(*message.PublishMessage), "", false) // TODO 发送遗嘱嘱消息时是否需要处理共享订阅
 			},
 			CancelCallback: func() {
@@ -572,7 +572,7 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 			continue
 		}
 
-		rqos, err := core.TopicManager.Subscribe(sub, &svc.onpub)
+		rqos, err := core.TopicManager.Subscribe(sub, &svc.onPubFn)
 		if err != nil {
 			return message.NewCodeErr(message.ServiceBusy, err.Error())
 		}
@@ -659,7 +659,7 @@ func (svc *service) processUnsubscribe(msg *message.UnsubscribeMessage) error {
 	tps := msg.Topics()
 
 	for _, t := range tps {
-		core.TopicManager.Unsubscribe(t, &svc.onpub)
+		core.TopicManager.Unsubscribe(t, &svc.onPubFn)
 		svc.sess.RemoveTopic(string(t))
 	}
 

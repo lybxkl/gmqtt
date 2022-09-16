@@ -375,7 +375,7 @@ func (server *Server) auth(conn io.ReadWriteCloser, resp *message.ConnackMessage
 			}
 			switch msg.Type() {
 			case message.DISCONNECT: // 增强认证过程中断开连接
-				return errors.New("disconnect in auth")
+				return errors.New(fmt.Sprintf("disconnect in auth：%s", msg))
 			case message.AUTH:
 				auMsg := msg.(*message.AuthMessage)
 				if !reflect.DeepEqual(auMsg.AuthMethod(), authMethod) {
@@ -386,7 +386,7 @@ func (server *Server) auth(conn io.ReadWriteCloser, resp *message.ConnackMessage
 					if err != nil {
 						return err
 					}
-					return errors.New("authplus: the authentication method is different from last time.")
+					return errors.New("authplus: the authentication method is different from last time")
 				}
 				authData = auMsg.AuthData()
 				goto AC // 需要继续认证
@@ -394,8 +394,7 @@ func (server *Server) auth(conn io.ReadWriteCloser, resp *message.ConnackMessage
 				return errors.New(fmt.Sprintf("unSupport deal msg %s", msg))
 			}
 		} else {
-			// 成功
-			resp.SetReasonCode(message.Success)
+			resp.SetReasonCode(message.Success) // 成功
 			resp.SetAuthMethod(authMethod)
 			Log.Infof("增强认证成功：%s", req.ClientId())
 		}
@@ -431,22 +430,6 @@ func (server *Server) checkAndInitConfig() error {
 			server.cfg.TimeoutRetries = consts.TimeoutRetries
 		}
 
-		// store
-		//server.initStore()
-
-		//authManager := auth3.NewDefaultAuth()
-		//auPlus := &sync.Map{} // make(map[string]authplus.AuthPlus)
-		//for _, s := range server.cfg.Allows {
-		//	auPlus.Store(s, authManager) // TODO
-		//}
-		//server.authPlusAllows = auPlus
-		//server.authMgr = authManager
-		//server.sessMgr = sessimpl.sessimpl.NewMemManager()
-		//server.topicsMgr = topic2.NewMemProvider()
-		//
-		//(server.sessMgr).(store.Store).SetStore(server.SessionStore, server.MessageStore)
-		//(server.topicsMgr).(store.Store).SetStore(server.SessionStore, server.MessageStore)
-
 		// cluster
 		server.runClusterComp()
 
@@ -468,23 +451,12 @@ func (server *Server) initMiddleware(option ...middleware.Option) {
 	for i := 0; i < len(option); i++ {
 		server.middleware.Apply(option[i])
 	}
+	Log.Info("middleware init.")
 }
-
-// 初始化存储
-//func (server *Server) initStore() {
-//	switch {
-//	default:
-//		server.SessionStore = storeimpl.NewMemSessStore()
-//		server.MessageStore = storeimpl.NewMemMsgStore()
-//	}
-//
-//	util.MustPanic(server.SessionStore.Start(server.ctx, server.cfg))
-//	util.MustPanic(server.MessageStore.Start(server.ctx, server.cfg))
-//}
 
 // 运行集群
 func (server *Server) runClusterComp() {
-
+	Log.Infof("cluster run...")
 }
 
 func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *message.ConnackMessage) (sess.Session, error) {

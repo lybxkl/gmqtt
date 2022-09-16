@@ -18,9 +18,9 @@ import (
 )
 
 type (
-	//完成的回调方法
+	// OnCompleteFunc 完成的回调方法
 	OnCompleteFunc func(msg, ack message.Message, err error) error
-	// 发布的func类型 sender表示当前发送消息的客户端是哪个，shareMsg=true表示是共享消息，不能被Local 操作
+	// OnPublishFunc 发布的func类型 sender表示当前发送消息的客户端是哪个，shareMsg=true表示是共享消息，不能被Local 操作
 	OnPublishFunc func(msg *message.PublishMessage, sub topic.Sub, sender string, shareMsg bool) error
 )
 
@@ -70,10 +70,10 @@ type service struct {
 	//输出数据缓冲区。这里写入的字节依次写入连接。
 	out *buffer
 
-	//onpub方法，将其添加到主题订阅方列表
+	//onPubFn 将其添加到主题订阅方列表
 	// processSubscribe()方法。当服务器完成一个发布消息的ack循环时 它将调用订阅者，也就是这个方法。
 	//对于服务器，当这个方法被调用时，它意味着有一个消息应该发布到连接另一端的客户端。所以我们 将调用publish()发送消息。
-	onpub   OnPublishFunc
+	onPubFn OnPublishFunc
 	inStat  statistic.Stat // 输入的记录
 	outStat statistic.Stat // 输出的记录
 	sign    *Sign          // 信号
@@ -114,15 +114,15 @@ func (svc *service) start(resp *message.ConnackMessage) error {
 	// If svc is a server
 	if !svc.client {
 		// 这个是发送给订阅者的，是每个订阅者都有一份的方法
-		svc.onpub = svc.onPub
+		svc.onPubFn = svc.onPub
 
-		// 恢复订阅
+		// 恢复订阅, 只需要内存中的
 		if err = svc.recoverSub(); err != nil {
 			return err
 		}
 	}
 
-	if resp != nil { // resp != nil 则需要断开连接
+	if resp != nil { // resp != nil 则需要发送ack
 		if err = writeMessage(svc.conn, resp); err != nil {
 			return err
 		}
@@ -149,6 +149,8 @@ func (svc *service) recoverSub() error {
 	}
 	for _, t := range tpc {
 		if svc.server.cfg.CloseShareSub && util.IsShareSub(t.Topic) {
+			err = core.TopicManager.Unsubscribe(t.Topic, &svc.onPubFn)
+			Log.Errorf("recover sub 2 unsubscribe share topic err %+v", err)
 			continue
 		}
 		_, _ = core.TopicManager.Subscribe(topic.Sub{
@@ -158,7 +160,7 @@ func (svc *service) recoverSub() error {
 			RetainAsPublished: t.RetainAsPublished,
 			RetainHandling:    t.RetainHandling,
 			SubIdentifier:     t.SubIdentifier,
-		}, &svc.onpub)
+		}, &svc.onPubFn)
 	}
 	return nil
 }
@@ -175,14 +177,14 @@ func (svc *service) dealOfflineMsg() {
 		_ = core.TopicManager.Subscribers(pub.Topic(), pub.QoS(), &subs, &subOpt, false, "", false)
 		tag := false
 		for j := 0; j < len(subs); j++ {
-			if util.Equal(subs[i], &svc.onpub) {
+			if util.Equal(subs[i], &svc.onPubFn) {
 				tag = true
-				_ = svc.onpub(pub, subOpt[j], "", false)
+				_ = svc.onPubFn(pub, subOpt[j], "", false)
 				break
 			}
 		}
 		if !tag {
-			_ = svc.onpub(pub, topic.Sub{}, "", false)
+			_ = svc.onPubFn(pub, topic.Sub{}, "", false)
 		}
 	}
 	// FIXME 是否主动发送未完成确认的过程消息，还是等客户端操作
@@ -352,23 +354,24 @@ func (svc *service) publish(msg *message.PublishMessage, onComplete OnCompleteFu
 }
 
 func (svc *service) unSubAll() {
-	if svc.sess != nil {
-		tpc, err := svc.sess.Topics()
-		if err != nil {
-			Log.Errorf("(%s/%d): %v", svc.cid(), svc.id, err)
-		} else {
-			for _, t := range tpc {
-				if err = core.TopicManager.Unsubscribe(t.Topic, &svc.onpub); err != nil {
-					Log.Errorf("(%s): Error unsubscribing topic %q: %v", svc.cid(), t, err)
-				}
-			}
+	if svc.sess == nil {
+		return
+	}
+	tpc, err := svc.sess.Topics()
+	if err != nil {
+		Log.Errorf("(%s/%d) unSub topic err: %v", svc.cid(), svc.id, err)
+		return
+	}
+	for _, t := range tpc {
+		if err = core.TopicManager.Unsubscribe(t.Topic, &svc.onPubFn); err != nil {
+			Log.Errorf("(%s): Error unsubscribing topic %q: %v", svc.cid(), t, err)
 		}
 	}
 }
 
 func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnCompleteFunc, onPublish OnPublishFunc) error {
 	if onPublish == nil {
-		return fmt.Errorf("onPublish function is nil. No need to subscribe.")
+		return fmt.Errorf("onPublish function is nil. No need to subscribe")
 	}
 
 	_, err := svc.writeMessage(msg)
@@ -395,7 +398,7 @@ func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnComple
 			return nil
 		}
 
-		suback, ok := ack.(*message.SubackMessage)
+		subAck, ok := ack.(*message.SubackMessage)
 		if !ok {
 			if onComplete != nil {
 				return onComplete(msg, ack, fmt.Errorf("Invalid SubackMessage received"))
@@ -403,31 +406,31 @@ func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnComple
 			return nil
 		}
 
-		if sub.PacketId() != suback.PacketId() {
+		if sub.PacketId() != subAck.PacketId() {
 			if onComplete != nil {
-				return onComplete(msg, ack, fmt.Errorf("Sub and Suback packet ID not the same. %d != %d.", sub.PacketId(), suback.PacketId()))
+				return onComplete(msg, ack, fmt.Errorf("sub and suback packet ID not the same. %d != %d", sub.PacketId(), subAck.PacketId()))
 			}
 			return nil
 		}
 
-		retcodes := suback.ReasonCodes()
+		retCodes := subAck.ReasonCodes()
 		tps := sub.Topics()
 
-		if len(tps) != len(retcodes) {
+		if len(tps) != len(retCodes) {
 			if onComplete != nil {
-				return onComplete(msg, ack, fmt.Errorf("Incorrect number of return codes received. Expecting %d, got %d.", len(tps), len(retcodes)))
+				return onComplete(msg, ack, fmt.Errorf("incorrect number of return codes received. Expecting %d, got %d", len(tps), len(retCodes)))
 			}
 			return nil
 		}
 
 		var err2 error = nil
 
-		for i, tt := range tps {
-			t := tt
-			c := retcodes[i]
+		for i := range tps {
+			t := tps[i]
+			c := retCodes[i]
 
 			if c == message.QosFailure {
-				err2 = fmt.Errorf("Failed to subscribe to '%s'\n%v", string(t), err2)
+				err2 = fmt.Errorf("failed to subscribe to '%s'\n%v", string(t), err2)
 			} else {
 				err = svc.sess.AddTopic(topic.Sub{
 					Topic:             t,
