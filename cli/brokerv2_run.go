@@ -12,7 +12,8 @@ import (
 
 	"golang.org/x/net/websocket"
 
-	"github.com/lybxkl/gmqtt/broker/service/v1"
+	"github.com/lybxkl/gmqtt/broker/core/service/v1"
+	_ "github.com/lybxkl/gmqtt/broker/impl"
 	"github.com/lybxkl/gmqtt/common/config"
 	. "github.com/lybxkl/gmqtt/common/log"
 	"github.com/lybxkl/gmqtt/util"
@@ -75,6 +76,7 @@ func wsRun(wsPath string, wsAddr string, wssAddr string, mqttAddr string, wssCer
 	return nil
 }
 
+// exitSignal 监听信号并关闭
 func exitSignal(server *service.Server) {
 	signChan := make(chan os.Signal, 1)
 	//signal.Notify(sigchan, os.Interrupt, os.Kill)
@@ -88,7 +90,7 @@ func exitSignal(server *service.Server) {
 		sig := <-signChan
 		Log.Infof("服务停止：Existing due to trapped signal; %v", sig)
 
-		err := server.Close()
+		err := server.Shutdown()
 		if err != nil {
 			Log.Errorf("server close err: %v", err)
 		}

@@ -1,8 +1,7 @@
-package sessimpl
+package sess
 
 import (
 	"context"
-	"errors"
 
 	"github.com/lybxkl/gmqtt/broker/core/message"
 	sess "github.com/lybxkl/gmqtt/broker/core/session"
@@ -14,11 +13,6 @@ import (
 
 var _ sess.Manager = (*memManager)(nil)
 
-var (
-	NoSessionErr = errors.New("no session")
-	CMsgNotFound = errors.New("not found connect message")
-)
-
 type memManager struct {
 	sessStore store.SessionStore
 	st        *collection.SafeMap // map[string]sess.Session
@@ -28,9 +22,10 @@ func (prv *memManager) SetStore(store store.SessionStore, _ store.MessageStore) 
 	prv.sessStore = store
 }
 
-func NewMemManager() sess.Manager {
+func NewMemManager(sessionStore store.SessionStore) sess.Manager {
 	return &memManager{
-		st: collection.NewSafeMap(), // map[string]sess.Session
+		st:        collection.NewSafeMap(), // map[string]sess.Session
+		sessStore: sessionStore,
 	}
 }
 
@@ -38,31 +33,27 @@ func (prv *memManager) BuildSess(cMsg *message.ConnectMessage) (sess.Session, er
 	return NewMemSession(cMsg)
 }
 
-func (prv *memManager) GetOrCreate(id string, cMsg ...*message.ConnectMessage) (sess.Session, error) {
-	if len(cMsg) > 0 {
-		if cMsg[0] == nil {
-			return nil, CMsgNotFound
-		}
-		return prv.creat(cMsg[0])
-	}
-
+func (prv *memManager) GetOrCreate(id string, cMsg ...*message.ConnectMessage) (_ sess.Session, _exist bool, _ error) {
 	_sess, ok := prv.st.Get(id)
-	if !ok {
-		return nil, NoSessionErr
+	if ok {
+		return _sess.(sess.Session), true, nil
 	}
+	if len(cMsg) == 0 || cMsg[0] == nil {
+		return nil, false, nil
+	}
+	newSid := string(cMsg[0].ClientId())
+	_sess, err := NewMemSession(cMsg[0]) // 获取离线消息，旧订阅
+	if err != nil {
+		return nil, false, err
+	}
+	old, exist := prv.st.GetOrSet(newSid, _sess)
 	Log.Infof("session num: %d", prv.st.Size())
-	return _sess.(sess.Session), nil
+	return old.(sess.Session), exist, nil
 }
 
-func (prv *memManager) creat(cMsg *message.ConnectMessage) (sess.Session, error) {
-	newSid := string(cMsg.ClientId())
-	_sess, err := NewMemSession(cMsg) // 获取离线消息，旧订阅
-	if err != nil {
-		return nil, err
-	}
-
-	prv.st.Set(newSid, _sess)
-	return _sess, nil
+func (prv *memManager) Exist(id string) bool {
+	_, exist, _ := prv.GetOrCreate(id)
+	return exist
 }
 
 func (prv *memManager) Save(s sess.Session) error {

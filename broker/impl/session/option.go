@@ -1,4 +1,4 @@
-package sessimpl
+package sess
 
 import (
 	"github.com/lybxkl/gmqtt/broker/core/message"
@@ -23,9 +23,8 @@ func WithOldTopicToSess(s *session, sub []topic.Sub) {
 
 func WithOldTopic(subs []topic.Sub) Option {
 	return func(s *session) {
-		for _, sub := range subs {
-			b := sub
-			s.topics[string(b.Topic)] = &b
+		for i := range subs {
+			s.topics[string(subs[i].Topic)] = &subs[i]
 		}
 	}
 }

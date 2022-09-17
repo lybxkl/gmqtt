@@ -1,4 +1,4 @@
-package sessimpl
+package sess
 
 import (
 	"fmt"

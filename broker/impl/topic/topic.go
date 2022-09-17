@@ -36,12 +36,13 @@ type memtopic struct {
 // NewMemProvider 返回memtopic的一个新实例，该实例实现了
 // topic.Manager 接口。memProvider是存储主题的隐藏结构
 // 订阅并保留内存中的消息。内容不是这样持久化的 当服务器关闭时，所有东西都将消失。小心使用。
-func NewMemProvider() *memtopic {
+func NewMemProvider(messageStore store.MessageStore) *memtopic {
 	return &memtopic{
-		sroot: newSNode(),
-		rroot: newRNode(),
-		sys:   sys3.NewMemProvider(),
-		share: share3.NewMemProvider(),
+		sroot:        newSNode(),
+		rroot:        newRNode(),
+		sys:          sys3.NewMemProvider(),
+		share:        share3.NewMemProvider(),
+		messageStore: messageStore,
 	}
 }
 

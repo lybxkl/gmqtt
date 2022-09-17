@@ -6,10 +6,11 @@ import (
 )
 
 type Manager interface {
-	BuildSess(cMsg *message.ConnectMessage) (Session, error)
-	GetOrCreate(id string, cMsg ...*message.ConnectMessage) (Session, error)
+	BuildSess(cMsg *message.ConnectMessage) (Session, error) // 将cMsg构建为一个session, 不可用的
+	GetOrCreate(id string, cMsg ...*message.ConnectMessage) (_sess Session, _exist bool, _e error)
 	Save(s Session) error
 	Remove(s Session) error
+	Exist(id string) bool
 	Close() error
 }
 

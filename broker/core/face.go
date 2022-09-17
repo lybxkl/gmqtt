@@ -34,10 +34,22 @@ func InitCore(p1 Auth, p2 Topic, p3 Session, p4 MsgStore, p5 SessStore) {
 	})
 }
 
-var (
-	TopicManager     = Core.tm
-	SessionManager   = Core.ssm
-	AuthManager      = Core.am
-	MsgStoreManager  = Core.mst
-	SessStoreManager = Core.sst
-)
+func TopicManager() Topic {
+	return Core.tm
+}
+
+func SessionManager() Session {
+	return Core.ssm
+}
+
+func AuthManager() Auth {
+	return Core.am
+}
+
+func MsgStoreManager() MsgStore {
+	return Core.mst
+}
+
+func SessStoreManager() SessStore {
+	return Core.sst
+}

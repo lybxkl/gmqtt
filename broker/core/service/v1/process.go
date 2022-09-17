@@ -292,7 +292,7 @@ func (svc *service) processIncoming(msg message.Message) error {
 			}
 			// TODO 需要更新过期间隔
 			svc.sess.CMsg().SetSessionExpiryInterval(msg.SessionExpiryInterval())
-			err = core.SessStoreManager.StoreSession(context.Background(), svc.cid(), svc.sess)
+			err = core.SessStoreManager().StoreSession(context.Background(), svc.cid(), svc.sess)
 			if err != nil {
 				return message.NewCodeErr(message.UnspecifiedError, err.Error())
 			}
@@ -478,7 +478,7 @@ func (svc *service) topicAliceIn(msg *message.PublishMessage) error {
 //如果QoS == 1，我们应该返回PUBACK，然后进行下一步
 //如果QoS == 2，我们需要将其放入ack队列中，发送回PUBREC
 func (svc *service) processPublish(msg *message.PublishMessage) error {
-	if !core.AuthManager.Pub(svc.ccid, msg) {
+	if !core.AuthManager().Pub(svc.ccid, msg) {
 		return message.NewCodeErr(message.UnAuthorized, "pub acl filter")
 	}
 
@@ -567,12 +567,12 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 			SubIdentifier:     msg.SubscriptionIdentifier(),
 		}
 
-		if !core.AuthManager.Sub(svc.ccid, sub) {
+		if !core.AuthManager().Sub(svc.ccid, sub) {
 			retcodes = append(retcodes, message.QosFailure) // 不支持订阅
 			continue
 		}
 
-		rqos, err := core.TopicManager.Subscribe(sub, &svc.onPubFn)
+		rqos, err := core.TopicManager().Subscribe(sub, &svc.onPubFn)
 		if err != nil {
 			return message.NewCodeErr(message.ServiceBusy, err.Error())
 		}
@@ -589,7 +589,7 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 			case message.NoSendRetain:
 				break
 			case message.CanSendRetain:
-				err = core.TopicManager.Retained(t1, &svc.rmsgs)
+				err = core.TopicManager().Retained(t1, &svc.rmsgs)
 				if err != nil {
 					return message.NewCodeErr(message.ServiceBusy, err.Error())
 				}
@@ -615,7 +615,7 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 				END:
 				}
 				if !existThisTopic {
-					e := core.TopicManager.Retained(t1, &svc.rmsgs)
+					e := core.TopicManager().Retained(t1, &svc.rmsgs)
 					if e != nil {
 						return message.NewCodeErr(message.ServiceBusy, e.Error())
 					}
@@ -659,7 +659,7 @@ func (svc *service) processUnsubscribe(msg *message.UnsubscribeMessage) error {
 	tps := msg.Topics()
 
 	for _, t := range tps {
-		core.TopicManager.Unsubscribe(t, &svc.onPubFn)
+		core.TopicManager().Unsubscribe(t, &svc.onPubFn)
 		svc.sess.RemoveTopic(string(t))
 	}
 
@@ -689,7 +689,7 @@ func (svc *service) processToCluster(topic [][]byte, msg message.Message) {
 // 消息已经处理完过程消息了，准备进行广播发送
 func (svc *service) onPublish(msg *message.PublishMessage) error {
 	if msg.Retain() {
-		if err := core.TopicManager.Retain(msg); err != nil { // 为这个主题保存最后一条保留消息
+		if err := core.TopicManager().Retain(msg); err != nil { // 为这个主题保存最后一条保留消息
 			Log.Errorf("(%s) Error retaining messagev5: %v", svc.cid(), err)
 		}
 	}
@@ -743,7 +743,7 @@ func (svc *service) ClusterInToPub(msg *message.PublishMessage) error {
 		return nil
 	}
 	if msg.Retain() {
-		if err := core.TopicManager.Retain(msg); err != nil { // 为这个主题保存最后一条保留消息
+		if err := core.TopicManager().Retain(msg); err != nil { // 为这个主题保存最后一条保留消息
 			Log.Errorf("(%s) Error retaining messagev5: %v", svc.cid(), err)
 		}
 	}
@@ -758,7 +758,7 @@ func (svc *service) ClusterInToPubShare(msg *message.PublishMessage, shareName s
 		return nil
 	}
 	if msg.Retain() {
-		if err := core.TopicManager.Retain(msg); err != nil { // 为这个主题保存最后一条保留消息
+		if err := core.TopicManager().Retain(msg); err != nil { // 为这个主题保存最后一条保留消息
 			Log.Errorf("(%s) Error retaining messagev5: %v", svc.cid(), err)
 		}
 	}
@@ -772,7 +772,7 @@ func (svc *service) ClusterInToPubSys(msg *message.PublishMessage) error {
 		return nil
 	}
 	if msg.Retain() {
-		if err := core.TopicManager.Retain(msg); err != nil { // 为这个主题保存最后一条保留消息
+		if err := core.TopicManager().Retain(msg); err != nil { // 为这个主题保存最后一条保留消息
 			Log.Errorf("(%s) Error retaining messagev5: %v", svc.cid(), err)
 		}
 	}
@@ -786,7 +786,7 @@ func (svc *service) pubFn(msg *message.PublishMessage, shareName string, onlySha
 		qoss []topic.Sub
 	)
 
-	err := core.TopicManager.Subscribers(msg.Topic(), msg.QoS(), &subs, &qoss, false, shareName, onlyShare)
+	err := core.TopicManager().Subscribers(msg.Topic(), msg.QoS(), &subs, &qoss, false, shareName, onlyShare)
 	if err != nil {
 		//Log.Error(err, "(%s) Error retrieving subscribers list: %v", svc.cid(), err)
 		return message.NewCodeErr(message.ServiceBusy, err.Error())
@@ -804,7 +804,7 @@ func (svc *service) pubFnPlus(msg *message.PublishMessage) error {
 		subs []interface{}
 		qoss []topic.Sub
 	)
-	err := core.TopicManager.Subscribers(msg.Topic(), msg.QoS(), &subs, &qoss, false, "", true)
+	err := core.TopicManager().Subscribers(msg.Topic(), msg.QoS(), &subs, &qoss, false, "", true)
 	if err != nil {
 		//Log.Error(err, "(%s) Error retrieving subscribers list: %v", svc.cid(), err)
 		return message.NewCodeErr(message.ServiceBusy, err.Error())
@@ -822,7 +822,7 @@ func (svc *service) pubFnSys(msg *message.PublishMessage) error {
 		subs []interface{}
 		qoss []topic.Sub
 	)
-	err := core.TopicManager.Subscribers(msg.Topic(), msg.QoS(), &subs, &qoss, true, "", false)
+	err := core.TopicManager().Subscribers(msg.Topic(), msg.QoS(), &subs, &qoss, true, "", false)
 	if err != nil {
 		//Log.Error(err, "(%s) Error retrieving subscribers list: %v", svc.cid(), err)
 		return message.NewCodeErr(message.ServiceBusy, err.Error())
@@ -837,15 +837,16 @@ func (svc *service) pubFnSys(msg *message.PublishMessage) error {
 // 循环发送， todo 可丢到协程池处理
 func (svc *service) lookSend(msg *message.PublishMessage, subs []interface{}, qoss []topic.Sub, onlyShare bool) error {
 	for i, s := range subs {
-		if s != nil {
-			fn, ok := s.(*OnPublishFunc)
-			if !ok {
-				return fmt.Errorf("invalid onPublish Function")
-			} else {
-				err := (*fn)(copyMsg(msg, qoss[i].Qos), qoss[i], svc.cid(), onlyShare)
-				if err == io.EOF {
-					// TODO 断线了，是否对于qos=1和2的保存至离线消息
-				}
+		if s == nil {
+			continue
+		}
+		fn, ok := s.(*OnPublishFunc)
+		if !ok {
+			return fmt.Errorf("invalid onPublish Function")
+		} else {
+			err := (*fn)(copyMsg(msg, qoss[i].Qos), qoss[i], svc.cid(), onlyShare)
+			if err == io.EOF {
+				// TODO 断线了，是否对于qos=1和2的保存至离线消息
 			}
 		}
 	}

@@ -146,9 +146,9 @@ func (server *Server) AddCloser(close io.Closer) {
 	server.close = append(server.close, close)
 }
 
-// Close terminates the server by shutting down all the client connections and closing
+// Shutdown terminates the server by shutting down all the client connections and closing
 // the listener. It will, as best it can, clean up after itself.
-func (server *Server) Close() error {
+func (server *Server) Shutdown() error {
 	// By closing the quit channel, we are telling the server to stop accepting new
 	// connection.
 	close(server.quit)
@@ -218,7 +218,7 @@ func (server *Server) handleConnection(conn net.Conn) (err error) {
 
 	svc := &service{
 		id:     atomic.AddUint64(&gsvcid, 1),
-		client: false,
+		client: false, // 非客户端模式
 
 		conn:   conn,
 		server: server,
@@ -346,7 +346,7 @@ func (server *Server) auth(conn io.ReadWriteCloser, resp *message.ConnackMessage
 	authMethod := req.AuthMethod() // 第一次的增强认证方法
 	if len(authMethod) > 0 {
 		authData := req.AuthData()
-		auVerify, ok := core.AuthManager.PlusVerify(string(authMethod))
+		auVerify, ok := core.AuthManager().PlusVerify(string(authMethod))
 		if !ok {
 			dis := message.NewDisconnectMessage()
 			dis.SetReasonCode(message.InvalidAuthenticationMethod)
@@ -399,7 +399,7 @@ func (server *Server) auth(conn io.ReadWriteCloser, resp *message.ConnackMessage
 			Log.Infof("增强认证成功：%s", req.ClientId())
 		}
 	} else {
-		if err := core.AuthManager.Verify(string(req.Username()), string(req.Password())); err != nil {
+		if err := core.AuthManager().Verify(string(req.Username()), string(req.Password())); err != nil {
 			//登陆失败日志，断开连接
 			resp.SetReasonCode(message.UserNameOrPasswordIsIncorrect)
 			resp.SetSessionPresent(false)
@@ -459,6 +459,7 @@ func (server *Server) runClusterComp() {
 	Log.Infof("cluster run...")
 }
 
+// getSession 通过connect msg 获取session, 目前依靠会话粘性，即同一个客户端只会连上同一个broker，如果broker 不存在了，就随机了
 func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *message.ConnackMessage) (sess.Session, error) {
 	//如果clean session设置为0，服务器必须恢复与客户端基于当前会话的状态，由客户端识别标识符。
 	//如果没有会话与客户端标识符相关联, 服务器必须创建一个新的会话。
@@ -466,7 +467,11 @@ func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *m
 	//如果clean session设置为1，客户端和服务器必须丢弃任何先前的
 	//创建一个新的session。这个会话持续的时间与网络connection。与此会话关联的状态数据绝不能在任何会话中重用后续会话。
 
-	var err error
+	var (
+		err     error
+		session sess.Session
+		exist   bool
+	)
 
 	//检查客户端是否提供了ID，如果没有，生成一个并设置 清理会话。
 	if len(req.ClientId()) == 0 {
@@ -475,8 +480,7 @@ func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *m
 	}
 
 	cid := string(req.ClientId())
-	var s sess.Session
-	s, _ = core.SessionManager.BuildSess(req)
+
 	//如果没有设置清除会话，请检查会话存储是否存在会话。
 	//如果找到，返回。
 	// TODO 通知其它节点断开那边的该客户端ID的连接，如果有的话
@@ -484,28 +488,31 @@ func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *m
 	// TODO 会话过期间隔 > 0 , 需要存储session，==0 则在连接断开时清除session
 	if !req.CleanStart() { // 使用旧session
 		// FIXME 当断线前是cleanStare=true，我们使用的是mem，但是重新连接时，使用了false，how to deal?
-		if s, err = core.SessionManager.GetOrCreate(cid, nil); err == nil {
-			// TODO 这里是懒删除，最好再加个定时删除
-			if s.CMsg().SessionExpiryInterval() == 0 || (s.OfflineTime()+int64(s.CMsg().SessionExpiryInterval()) <= time.Now().UnixNano()) {
-				// 删除session ， 因为已经过期了
-				if err = core.SessionManager.Remove(s); err != nil {
-					return nil, err
-				}
-				s = nil
-			}
-		} else {
+		session, exist, err = core.SessionManager().GetOrCreate(cid)
+		if err != nil {
 			return nil, err
+		}
+		// TODO 这里是懒删除，最好再加个定时删除
+		isExpiry := session.CMsg().SessionExpiryInterval() == 0 || (session.OfflineTime()+int64(session.CMsg().SessionExpiryInterval()) <= time.Now().UnixNano())
+		if exist && isExpiry {
+			// 删除session ， 因为已经过期了
+			if err = core.SessionManager().Remove(session); err != nil {
+				return nil, err
+			}
+			// TODO 清理订阅，离线消息，过程消息
+			session = nil
 		}
 	} else {
 		// 删除旧数据，清空旧连接的离线消息和未完成的过程消息，会话数据
-		if err = core.SessionManager.Remove(s); err != nil {
+		session, _ = core.SessionManager().BuildSess(req)
+		if err = core.SessionManager().Remove(session); err != nil {
 			return nil, err
 		}
 	}
 	//如果没有session则创建一个
-	if s == nil {
-		// 这里因为前面通知其它节点断开旧连接，所以这里可以直接New
-		if s, err = core.SessionManager.GetOrCreate("", req); err != nil {
+	if session == nil {
+		// 这里因为前面已经移除旧session，所以这里直接New
+		if session, exist, err = core.SessionManager().GetOrCreate(string(req.ClientId()), req); err != nil {
 			return nil, err
 		}
 
@@ -513,10 +520,10 @@ func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *m
 		resp.SetSessionPresent(false)
 	}
 
-	// 取消任务
+	// 取消此 clientId 之前可能发布的延时任务
 	cron.DelayTaskManager.Cancel(string(req.ClientId()))
 
-	return s, nil
+	return session, nil
 }
 
 func (server *Server) Wait() {

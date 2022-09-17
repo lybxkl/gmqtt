@@ -141,6 +141,25 @@ func (svc *service) start(resp *message.ConnackMessage) error {
 	return nil
 }
 
+// runProcessor 启动三个协程处理客户端数据
+func (svc *service) runProcessor() {
+	//处理器负责从缓冲区读取消息并进行处理
+	svc.wgStarted.Add(1)
+	svc.wgStopped.Add(1)
+	gopool.GoSafe(svc.processor)
+
+	//接收端负责从连接中读取数据并将数据放入 一个缓冲区。
+	svc.wgStarted.Add(1)
+	svc.wgStopped.Add(1)
+	gopool.GoSafe(svc.receiver)
+
+	//发送方负责将缓冲区中的数据写入连接。
+	svc.wgStarted.Add(1)
+	svc.wgStopped.Add(1)
+	gopool.GoSafe(svc.sender)
+}
+
+// recoverSub 重新连接时 重新订阅主题
 func (svc *service) recoverSub() error {
 	//如果这是一个恢复的会话，那么添加它之前订阅的任何主题
 	tpc, err := svc.sess.Topics()
@@ -149,11 +168,11 @@ func (svc *service) recoverSub() error {
 	}
 	for _, t := range tpc {
 		if svc.server.cfg.CloseShareSub && util.IsShareSub(t.Topic) {
-			err = core.TopicManager.Unsubscribe(t.Topic, &svc.onPubFn)
+			err = core.TopicManager().Unsubscribe(t.Topic, &svc.onPubFn)
 			Log.Errorf("recover sub 2 unsubscribe share topic err %+v", err)
 			continue
 		}
-		_, _ = core.TopicManager.Subscribe(topic.Sub{
+		_, _ = core.TopicManager().Subscribe(topic.Sub{
 			Topic:             t.Topic,
 			Qos:               t.Qos,
 			NoLocal:           t.NoLocal,
@@ -174,7 +193,7 @@ func (svc *service) dealOfflineMsg() {
 			subs   []interface{}
 			subOpt []topic.Sub
 		)
-		_ = core.TopicManager.Subscribers(pub.Topic(), pub.QoS(), &subs, &subOpt, false, "", false)
+		_ = core.TopicManager().Subscribers(pub.Topic(), pub.QoS(), &subs, &subOpt, false, "", false)
 		tag := false
 		for j := 0; j < len(subs); j++ {
 			if util.Equal(subs[i], &svc.onPubFn) {
@@ -190,6 +209,7 @@ func (svc *service) dealOfflineMsg() {
 	// FIXME 是否主动发送未完成确认的过程消息，还是等客户端操作
 }
 
+// onPub 当有消息来此客户端时的处理逻辑
 func (svc *service) onPub(msg *message.PublishMessage, sub topic.Sub, sender string, isShareMsg bool) error {
 	// 判断是否超过最大报文大小，超过客户端要求的最大值，直接当作已完成丢弃
 	// 共享订阅的情况下，如果一条消息对于部分客户端来说太长而不能发送，服务端可以选择丢弃此消息或者把消息发送给剩余能够接收此消息的客户端。
@@ -234,87 +254,6 @@ func (svc *service) onPub(msg *message.PublishMessage, sub topic.Sub, sender str
 	return nil
 }
 
-func (svc *service) runProcessor() {
-	//处理器负责从缓冲区读取消息并进行处理
-	svc.wgStarted.Add(1)
-	svc.wgStopped.Add(1)
-	gopool.GoSafe(svc.processor)
-
-	//接收端负责从连接中读取数据并将数据放入 一个缓冲区。
-	svc.wgStarted.Add(1)
-	svc.wgStopped.Add(1)
-	gopool.GoSafe(svc.receiver)
-
-	//发送方负责将缓冲区中的数据写入连接。
-	svc.wgStarted.Add(1)
-	svc.wgStopped.Add(1)
-	gopool.GoSafe(svc.sender)
-}
-
-func (svc *service) serverStopHandle() {
-	svc.stop(true)
-}
-
-// Stop calls svc, and closes the buffers, somehow it causes buffer.go:476 to panid.
-func (svc *service) stop(isServerStop ...bool) {
-	defer func() {
-		// Let's recover from panic
-		if r := recover(); r != nil {
-			Log.Errorf("(%s) Recovering from panic: %v", svc.cid(), r)
-		}
-		if len(isServerStop) > 0 && isServerStop[0] {
-			svc.server.svcs.Del(svc.id)
-		}
-	}()
-
-	doit := atomic.CompareAndSwapInt64(&svc.closed, 0, 1)
-	if !doit {
-		return
-	}
-
-	// Close quit channel, effectively telling all the goroutines it's time to quit
-	if svc.done != nil {
-		Log.Debugf("(%s) closing svc.done", svc.cid())
-		close(svc.done)
-	}
-
-	// Close the network connection
-	if svc.conn != nil {
-		Log.Debugf("(%s) closing svc.conn", svc.cid())
-		svc.conn.Close()
-	}
-
-	if svc.in != nil {
-		svc.in.Close()
-	}
-	if svc.out != nil {
-		svc.out.Close()
-	}
-
-	//打印该客户端生命周期内的接收字节与消息条数、发送字节与消息条数
-	Log.Debugf("(%s) %s.", svc.cid(), svc.inStat)
-	Log.Debugf("(%s) %s.", svc.cid(), svc.outStat)
-
-	// 取消订阅该客户机的所有主题
-	svc.unSubAll()
-
-	//如果设置了遗嘱消息，则发送遗嘱消息，当是收到正常DisConnect消息产生的发送遗嘱消息行为，会在收到消息处处理
-	if svc.sess.CMsg().WillFlag() {
-		Log.Infof("(%s) service/stop: connection unexpectedly closed. Sending Will：.", svc.cid())
-		svc.sendWillMsg()
-	}
-
-	// 直接删除session，重连时重新初始化
-	svc.sess.SetStatus(sess.OFFLINE)
-	//if svc.server.sessMgr != nil { // svc.sess.Cmsg().CleanSession() &&
-	core.SessionManager.Save(svc.sess)
-	//}
-
-	svc.conn = nil
-	svc.in = nil
-	svc.out = nil
-}
-
 // 发布消息给客户端
 func (svc *service) publish(msg *message.PublishMessage, onComplete OnCompleteFunc) (err error) {
 
@@ -353,22 +292,7 @@ func (svc *service) publish(msg *message.PublishMessage, onComplete OnCompleteFu
 	return nil
 }
 
-func (svc *service) unSubAll() {
-	if svc.sess == nil {
-		return
-	}
-	tpc, err := svc.sess.Topics()
-	if err != nil {
-		Log.Errorf("(%s/%d) unSub topic err: %v", svc.cid(), svc.id, err)
-		return
-	}
-	for _, t := range tpc {
-		if err = core.TopicManager.Unsubscribe(t.Topic, &svc.onPubFn); err != nil {
-			Log.Errorf("(%s): Error unsubscribing topic %q: %v", svc.cid(), t, err)
-		}
-	}
-}
-
+// subscribe 订阅主题
 func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnCompleteFunc, onPublish OnPublishFunc) error {
 	if onPublish == nil {
 		return fmt.Errorf("onPublish function is nil. No need to subscribe")
@@ -443,7 +367,7 @@ func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnComple
 				if err != nil {
 					err2 = fmt.Errorf("Failed to subscribe to '%s' (%v)\n%v", string(t), err, err2)
 				}
-				_, err = core.TopicManager.Subscribe(topic.Sub{
+				_, err = core.TopicManager().Subscribe(topic.Sub{
 					Topic:             t,
 					Qos:               c,
 					NoLocal:           sub.TopicNoLocal(t),
@@ -467,6 +391,7 @@ func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnComple
 	return svc.sess.SubACK().Wait(msg, onc)
 }
 
+// unsubscribe 取消订阅主题
 func (svc *service) unsubscribe(msg *message.UnsubscribeMessage, onComplete OnCompleteFunc) error {
 	_, err := svc.writeMessage(msg)
 	if err != nil {
@@ -501,7 +426,7 @@ func (svc *service) unsubscribe(msg *message.UnsubscribeMessage, onComplete OnCo
 
 		if unsub.PacketId() != unsuback.PacketId() {
 			if onComplete != nil {
-				return onComplete(msg, ack, fmt.Errorf("Unsub and Unsuback packet ID not the same. %d != %d.", unsub.PacketId(), unsuback.PacketId()))
+				return onComplete(msg, ack, fmt.Errorf("unsub and Unsuback packet ID not the same. %d != %d", unsub.PacketId(), unsuback.PacketId()))
 			}
 			return nil
 		}
@@ -511,7 +436,7 @@ func (svc *service) unsubscribe(msg *message.UnsubscribeMessage, onComplete OnCo
 		for _, tb := range unsub.Topics() {
 			// Remove all subscribers, which basically it's just svc client, since
 			// each client has it's own topic tree.
-			err := core.TopicManager.Unsubscribe(tb, nil)
+			err := core.TopicManager().Unsubscribe(tb, nil)
 			if err != nil {
 				err2 = fmt.Errorf("%v\n%v", err2, err)
 			}
@@ -529,6 +454,7 @@ func (svc *service) unsubscribe(msg *message.UnsubscribeMessage, onComplete OnCo
 	return svc.sess.UnsubACK().Wait(msg, onc)
 }
 
+// ping ...
 func (svc *service) ping(onComplete OnCompleteFunc) error {
 	msg := message.NewPingreqMessage()
 
@@ -538,6 +464,96 @@ func (svc *service) ping(onComplete OnCompleteFunc) error {
 	}
 
 	return svc.sess.PingACK().Wait(msg, onComplete)
+}
+
+// serverStopHandle broker服务关闭时，此客户端的行为，即客户端的优雅关闭
+func (svc *service) serverStopHandle() {
+	svc.stop(true)
+}
+
+// Stop calls svc, and closes the buffers, somehow it causes buffer.go:476 to panid.
+func (svc *service) stop(isServerStop ...bool) {
+	defer func() {
+		if e := recover(); e != nil {
+			Log.Errorf("(%s) Recovering from panic: %v", svc.cid(), e)
+		}
+		if len(isServerStop) > 0 && isServerStop[0] {
+			svc.server.svcs.Del(svc.id)
+		}
+	}()
+
+	doit := atomic.CompareAndSwapInt64(&svc.closed, 0, 1)
+	if !doit {
+		return
+	}
+
+	svc.sess.SetStatus(sess.OFFLINE)
+
+	// Close quit channel, effectively telling all the goroutines it's time to quit
+	if svc.done != nil {
+		Log.Debugf("(%s) closing svc.done", svc.cid())
+		close(svc.done)
+	}
+
+	// Close the network connection
+	if svc.conn != nil {
+		Log.Debugf("(%s) closing svc.conn", svc.cid())
+		svc.conn.Close()
+	}
+
+	if svc.in != nil {
+		svc.in.Close()
+	}
+	if svc.out != nil {
+		svc.out.Close()
+	}
+
+	//打印该客户端生命周期内的接收字节与消息条数、发送字节与消息条数
+	Log.Debugf("(%s) %s.", svc.cid(), svc.inStat)
+	Log.Debugf("(%s) %s.", svc.cid(), svc.outStat)
+
+	// 如果客户端是无需保留会话的，则取消订阅该客户端的所有主题
+	cleanSess := svc.sess.CMsg().CleanSession()
+	sessExpiry := svc.sess.SessExpiryInterval()
+	if cleanSess {
+		svc.unSubAll()
+	} else if !cleanSess && sessExpiry > 0 {
+		// TODO 加个任务，如果客户端在会话保留期内没有重新在线，则清理订阅
+		// 需要注意重新登陆时，需要取消未执行的任务
+	}
+
+	//如果设置了遗嘱消息，则发送遗嘱消息，当是收到正常DisConnect消息产生的发送遗嘱消息行为，会在收到消息处处理
+	if svc.sess.CMsg().WillFlag() {
+		Log.Infof("(%s) service/stop: connection unexpectedly closed. Sending Will：.", svc.cid())
+		svc.sendWillMsg()
+	}
+
+	if svc.sess.CMsg().CleanSession() {
+		core.SessionManager().Remove(svc.sess)
+	} else {
+		core.SessionManager().Save(svc.sess)
+	}
+
+	svc.conn = nil
+	svc.in = nil
+	svc.out = nil
+}
+
+// unSubAll 取消订阅所有主题，客户端断线使用
+func (svc *service) unSubAll() {
+	if svc.sess == nil {
+		return
+	}
+	tpc, err := svc.sess.Topics()
+	if err != nil {
+		Log.Errorf("(%s/%d) unSub topic err: %v", svc.cid(), svc.id, err)
+		return
+	}
+	for _, t := range tpc {
+		if err = core.TopicManager().Unsubscribe(t.Topic, &svc.onPubFn); err != nil {
+			Log.Errorf("(%s): Error unsubscribing topic %q: %v", svc.cid(), t, err)
+		}
+	}
 }
 
 func (svc *service) isDone() bool {
