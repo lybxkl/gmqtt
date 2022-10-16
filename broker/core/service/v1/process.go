@@ -28,15 +28,15 @@ var (
 func (svc *service) processor() {
 	defer func() {
 		if r := recover(); r != nil {
-			Log.Errorf("(%s) Recovering from panic: %v", svc.cid(), r)
+			Log.Errorf("(%s) recovering from panic: %v", svc.cid(), r)
 		}
 
 		svc.wgStopped.Done()
 		svc.stop()
-		Log.Debugf("(%s) Stopping processor", svc.cid())
+		Log.Debugf("(%s) stopping processor", svc.cid())
 	}()
 
-	Log.Debugf("(%s) Starting processor", svc.cid())
+	Log.Debugf("(%s) starting processor", svc.cid())
 
 	svc.wgStarted.Done()
 
@@ -55,7 +55,7 @@ func (svc *service) processor() {
 		mtype, total, err := svc.gCore.peekMessageSize()
 		if err != nil {
 			if err != io.EOF {
-				Log.Errorf("(%s) Error peeking next message size", svc.cid())
+				Log.Errorf("(%s) error peeking next message size", svc.cid())
 			}
 			return
 		}
@@ -68,12 +68,12 @@ func (svc *service) processor() {
 		msg, n, err := svc.gCore.peekMessage(mtype, total)
 		if err != nil {
 			if err != io.EOF {
-				Log.Errorf("(%s) Error peeking next message: %v", svc.cid(), err)
+				Log.Errorf("(%s) error peeking next message: %v", svc.cid(), err)
 			}
 			return
 		}
 
-		Log.Debugf("(%s) Received: %s", svc.cid(), msg)
+		Log.Debugf("(%s) received: %s", svc.cid(), msg)
 
 		svc.gCore.inStat.Incr(uint64(n))
 
@@ -81,7 +81,7 @@ func (svc *service) processor() {
 		err = svc.processIncoming(msg)
 		if err != nil {
 			if err != errDisconnect {
-				Log.Errorf("(%s) Error processing %s: %v", svc.cid(), msg, err)
+				Log.Errorf("(%s) error processing %s: %v", svc.cid(), msg, err)
 
 				var dis = message.NewDiscMessageWithCodeInfo(message.UnspecifiedError, []byte(err.Error()))
 				if reasonErr, ok := err.(*message.Code); ok {
@@ -104,9 +104,9 @@ func (svc *service) middlewareHandle(message message.Message) {
 		canSkipErr, middleWareErr := opt.Apply(message)
 		if middleWareErr != nil {
 			if canSkipErr {
-				Log.Errorf("(%s) middlewrae deal msg %s error [skip]: %v", svc.cid(), message, middleWareErr)
+				Log.Errorf("(%s) middleware deal msg %s error [skip]: %v", svc.cid(), message, middleWareErr)
 			} else {
-				Log.Errorf("(%s) middlewrae deal msg %s error [no_skip]: %v", svc.cid(), message, middleWareErr)
+				Log.Errorf("(%s) middleware deal msg %s error [no_skip]: %v", svc.cid(), message, middleWareErr)
 				break
 			}
 		}
@@ -133,11 +133,11 @@ func (svc *service) delRequestRespInfo(msg message.Message) {
 func (svc *service) streamController() error {
 	// 监控流量
 	if svc.gCore.inStat.MsgTotal()%100000 == 0 {
-		Log.Warn(fmt.Sprintf("(%s) Going to process messagev5 %d", svc.cid(), svc.gCore.inStat.MsgTotal()))
+		Log.Warn(fmt.Sprintf("(%s) going to process message %d", svc.cid(), svc.gCore.inStat.MsgTotal()))
 	}
 	if svc.sign.BeyondQuota() {
 		_, _ = svc.sendBeyondQuota()
-		return fmt.Errorf("(%s) Beyond quota", svc.cid())
+		return fmt.Errorf("(%s) beyond quota", svc.cid())
 	}
 	if svc.sign.Limit() {
 		_, _ = svc.sendTooManyMessages()
@@ -316,11 +316,14 @@ func (svc *service) sendWillMsg() {
 		} else {
 			// 延迟发送，在延迟发送前重新登录，需要取消发送
 		}
+		cronTaskID := svc.sess.ClientId()
 		cron.DelayTaskManager.Run(&cron.DelayTask{
-			ID:       cron.ID(svc.sess.ClientId()),
+			ID:       cronTaskID,
 			DealTime: time.Duration(willMsgDelaySendTime), // 为0还是由DelayTaskManager处理
 			Data:     willMsg,
 			Fn: func(data interface{}) {
+				Log.Debugf("执行%s的延迟发送任务", cronTaskID)
+				cron.DelayTaskManager.Cancel(cronTaskID)
 				Log.Debugf("%s send will message", svc.cid())
 				// 发送，只需要发送本地，集群的话，内部实现处理获取消息
 				svc.pubFn(data.(*message.PublishMessage), "", false) // TODO 发送遗嘱嘱消息时是否需要处理共享订阅

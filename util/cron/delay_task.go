@@ -50,6 +50,7 @@ func (d *memDelayTaskManage) Run(task *DelayTask) error {
 		go func() {
 			task.Fn(task.Data)
 		}()
+		return nil
 	}
 	task.icron = d.icron
 

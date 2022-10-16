@@ -167,14 +167,14 @@ func (core *GCore) receiver() {
 func (core *GCore) sender() {
 	defer func() {
 		if r := recover(); r != nil {
-			core.err = fmt.Errorf("<<(%s)>> Recovering from panic: %v", core.ClientId(), r)
+			core.err = fmt.Errorf("<<(%s)>> recovering from panic: %v", core.ClientId(), r)
 		}
 
 		core.wgStopped.Done()
-		Log.Debugf("<<(%s)>> Stopping sender", core.ClientId())
+		Log.Debugf("<<(%s)>> stopping sender", core.ClientId())
 	}()
 
-	Log.Debugf("<<(%s)>> Starting sender", core.ClientId())
+	Log.Debugf("<<(%s)>> starting sender", core.ClientId())
 
 	core.wgStarted.Done()
 	switch conn := core.Conn.(type) {

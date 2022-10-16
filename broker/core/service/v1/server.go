@@ -467,7 +467,6 @@ func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *m
 	var (
 		err     error
 		session sess.Session
-		exist   bool
 	)
 
 	//检查客户端是否提供了ID，如果没有，生成一个并设置 清理会话。
@@ -485,21 +484,33 @@ func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *m
 	// TODO 会话过期间隔 > 0 , 需要存储session，==0 则在连接断开时清除session
 	if !req.CleanStart() { // 使用旧session
 		// FIXME 当断线前是cleanStare=true，我们使用的是mem，但是重新连接时，使用了false，how to deal?
-		session, exist, err = core.SessionManager().GetOrCreate(cid)
+		session, _, err = core.SessionManager().GetOrCreate(cid)
 		if err != nil {
 			return nil, err
 		}
-		// TODO 这里是懒删除，最好再加个定时删除
-		isExpiry := session.CMsg().SessionExpiryInterval() == 0 || (session.OfflineTime()+int64(session.CMsg().SessionExpiryInterval()) <= time.Now().UnixNano())
-		if exist && isExpiry {
-			// 删除session ， 因为已经过期了
-			if err = core.SessionManager().Remove(session); err != nil {
-				return nil, err
+		if session != nil {
+			// TODO 这里是懒删除，最好再加个定时删除
+			isExpiry := session.CMsg().SessionExpiryInterval() == 0 || (session.OfflineTime()+int64(session.CMsg().SessionExpiryInterval()) <= time.Now().Unix())
+			if isExpiry {
+				Log.Debugf("旧 session 已过期，清理: %s", session.ID())
+
+				// 删除session ， 因为已经过期了
+				if err = core.SessionManager().Remove(session); err != nil {
+					return nil, err
+				}
+
+				// TODO 清理订阅，离线消息，过程消息
+				session = nil
+			} else {
+				Log.Debugf("旧 session 未过期，继续使用: %s", session.ID())
 			}
-			// TODO 清理订阅，离线消息，过程消息
-			session = nil
+		} else {
+			Log.Debugf("不存在旧 session %s", cid)
 		}
+
 	} else {
+		Log.Debugf("清理旧 session: %s", cid)
+
 		// 删除旧数据，清空旧连接的离线消息和未完成的过程消息，会话数据
 		session, _ = core.SessionManager().BuildSess(req)
 		if err = core.SessionManager().Remove(session); err != nil {
@@ -508,8 +519,10 @@ func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *m
 	}
 	//如果没有session则创建一个
 	if session == nil {
+		Log.Debugf("创建新 session: %s", cid)
+
 		// 这里因为前面已经移除旧session，所以这里直接New
-		if session, exist, err = core.SessionManager().GetOrCreate(string(req.ClientId()), req); err != nil {
+		if session, _, err = core.SessionManager().GetOrCreate(cid, req); err != nil {
 			return nil, err
 		}
 
@@ -518,7 +531,7 @@ func (server *Server) getSession(id uint64, req *message.ConnectMessage, resp *m
 	}
 
 	// 取消此 clientId 之前可能发布的延时任务
-	cron.DelayTaskManager.Cancel(string(req.ClientId()))
+	cron.DelayTaskManager.Cancel(cid)
 
 	return session, nil
 }

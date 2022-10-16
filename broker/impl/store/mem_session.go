@@ -48,7 +48,7 @@ func (m *memSessionStore) Stop(_ context.Context) error {
 func (m *memSessionStore) GetSession(_ context.Context, clientId string) (sess.Session, error) {
 	s, ok := m.db.Get(clientId)
 	if !ok {
-		return nil, errors.New("session no exist")
+		return nil, nil
 	}
 	return s.(sess.Session), nil
 }

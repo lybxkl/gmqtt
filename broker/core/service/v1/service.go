@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/lybxkl/gmqtt/broker/core"
 	"github.com/lybxkl/gmqtt/broker/core/message"
@@ -489,6 +490,7 @@ func (svc *service) stop(isServerStop ...bool) {
 	if svc.sess.CMsg().CleanSession() {
 		core.SessionManager().Remove(svc.sess)
 	} else {
+		svc.sess.SetOfflineTime(time.Now().Unix())
 		core.SessionManager().Save(svc.sess)
 	}
 
