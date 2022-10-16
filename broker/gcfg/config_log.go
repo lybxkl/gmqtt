@@ -1,4 +1,4 @@
-package config
+package gcfg
 
 import (
 	"github.com/lybxkl/gmqtt/common/log"

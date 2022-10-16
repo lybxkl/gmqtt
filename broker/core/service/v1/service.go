@@ -2,15 +2,14 @@ package service
 
 import (
 	"fmt"
-	"net"
 	"sync"
 	"sync/atomic"
 
 	"github.com/lybxkl/gmqtt/broker/core"
 	"github.com/lybxkl/gmqtt/broker/core/message"
-	"github.com/lybxkl/gmqtt/broker/core/module/statistic"
 	sess "github.com/lybxkl/gmqtt/broker/core/session"
 	"github.com/lybxkl/gmqtt/broker/core/topic"
+	"github.com/lybxkl/gmqtt/broker/gcfg"
 	. "github.com/lybxkl/gmqtt/common/log"
 	"github.com/lybxkl/gmqtt/util"
 	"github.com/lybxkl/gmqtt/util/gopool"
@@ -39,12 +38,12 @@ type service struct {
 	// 用来表示该是服务端的还是客户端的
 	client bool
 
-	//客户端最大可接收包大小，在connect包内，但broker不处理，因为超过限制的报文将导致协议错误，客户端发送包含原因码0x95（报文过大）的DISCONNECT报文给broker
+	//客户端最大可接收包大小，在gCoreect包内，但broker不处理，因为超过限制的报文将导致协议错误，客户端发送包含原因码0x95（报文过大）的DISCONNECT报文给broker
 	// 共享订阅的情况下，如果一条消息对于部分客户端来说太长而不能发送，服务端可以选择丢弃此消息或者把消息发送给剩余能够接收此消息的客户端。
 	// 非规范：服务端可以把那些没有发送就被丢弃的报文放在死信队列 上，或者执行其他诊断操作。具体的操作超出了5.0规范的范围。
 	// maxPackageSize int
 
-	conn net.Conn
+	gCore *GCore
 
 	// sess是这个MQTT会话的会话对象。它跟踪会话变量
 	//比如ClientId, KeepAlive，用户名等
@@ -64,24 +63,11 @@ type service struct {
 	//退出信号，用于确定此服务何时结束。如果通道关闭，则退出。
 	done chan struct{}
 
-	//输入数据缓冲区。从连接中读取字节并放在这里。
-	in *buffer
-
-	//输出数据缓冲区。这里写入的字节依次写入连接。
-	out *buffer
-
 	//onPubFn 将其添加到主题订阅方列表
 	// processSubscribe()方法。当服务器完成一个发布消息的ack循环时 它将调用订阅者，也就是这个方法。
 	//对于服务器，当这个方法被调用时，它意味着有一个消息应该发布到连接另一端的客户端。所以我们 将调用publish()发送消息。
 	onPubFn OnPublishFunc
-	inStat  statistic.Stat // 输入的记录
-	outStat statistic.Stat // 输出的记录
-	sign    *Sign          // 信号
-	quota   int64          // 配额
-	limit   int
-
-	intmp  []byte
-	outtmp []byte
+	sign    *Sign // 信号
 
 	rmsgs []*message.PublishMessage // 用于待发送的保留消息
 
@@ -95,18 +81,7 @@ func (svc *service) start(resp *message.ConnackMessage) error {
 	var err error
 	svc.ccid = fmt.Sprintf("%s%d/%s", "gmqtt-", svc.id, svc.sess.ID())
 
-	// Create the incoming ring buffer
-	svc.in, err = newBuffer(defaultBufferSize)
-	if err != nil {
-		return err
-	}
-	// Create the outgoing ring buffer
-	svc.out, err = newBuffer(defaultBufferSize)
-	if err != nil {
-		return err
-	}
-
-	svc.sign = NewSign(svc.quota, svc.limit)
+	svc.sign = NewSign(gcfg.GetGCfg().Quota, gcfg.GetGCfg().QuotaLimit)
 	svc.hasSendWill = &atomic.Value{}
 	svc.hasSendWill.Store(false)
 	svc.pkIDLimiter = pkid.NewPacketIDLimiter(svc.sess.ReceiveMaximum()) // 可作流控
@@ -123,10 +98,10 @@ func (svc *service) start(resp *message.ConnackMessage) error {
 	}
 
 	if resp != nil { // resp != nil 则需要发送ack
-		if err = writeMessage(svc.conn, resp); err != nil {
+		if err = writeMessage(svc.gCore, resp); err != nil {
 			return err
 		}
-		svc.outStat.Incr(uint64(resp.Len()))
+		svc.gCore.outStat.Incr(uint64(resp.Len()))
 	}
 
 	svc.runProcessor() // run 处理逻辑
@@ -147,16 +122,6 @@ func (svc *service) runProcessor() {
 	svc.wgStarted.Add(1)
 	svc.wgStopped.Add(1)
 	gopool.GoSafe(svc.processor)
-
-	//接收端负责从连接中读取数据并将数据放入 一个缓冲区。
-	svc.wgStarted.Add(1)
-	svc.wgStopped.Add(1)
-	gopool.GoSafe(svc.receiver)
-
-	//发送方负责将缓冲区中的数据写入连接。
-	svc.wgStarted.Add(1)
-	svc.wgStopped.Add(1)
-	gopool.GoSafe(svc.sender)
 }
 
 // recoverSub 重新连接时 重新订阅主题
@@ -167,7 +132,7 @@ func (svc *service) recoverSub() error {
 		return err
 	}
 	for _, t := range tpc {
-		if svc.server.cfg.CloseShareSub && util.IsShareSub(t.Topic) {
+		if gcfg.GetGCfg().CloseShareSub && util.IsShareSub(t.Topic) {
 			err = core.TopicManager().Unsubscribe(t.Topic, &svc.onPubFn)
 			Log.Errorf("recover sub 2 unsubscribe share topic err %+v", err)
 			continue
@@ -259,7 +224,7 @@ func (svc *service) publish(msg *message.PublishMessage, onComplete OnCompleteFu
 
 	switch msg.QoS() {
 	case message.QosAtMostOnce:
-		_, err = svc.writeMessage(msg)
+		_, err = svc.gCore.writeMessage(msg)
 		if err != nil {
 			err = message.NewCodeErr(message.ServiceBusy, fmt.Sprintf("(%s) Error sending %s message: %v", svc.cid(), msg.Name(), err))
 		}
@@ -275,7 +240,7 @@ func (svc *service) publish(msg *message.PublishMessage, onComplete OnCompleteFu
 		if err != nil {
 			return message.NewCodeErr(message.ServerUnavailable, err.Error())
 		}
-		_, err = svc.writeMessage(msg)
+		_, err = svc.gCore.writeMessage(msg)
 		if err != nil {
 			err = message.NewCodeErr(message.ServiceBusy, fmt.Sprintf("(%s) Error sending %s message: %v", svc.cid(), msg.Name(), err))
 		}
@@ -284,7 +249,7 @@ func (svc *service) publish(msg *message.PublishMessage, onComplete OnCompleteFu
 		if err != nil {
 			return message.NewCodeErr(message.ServerUnavailable, err.Error())
 		}
-		_, err = svc.writeMessage(msg)
+		_, err = svc.gCore.writeMessage(msg)
 		if err != nil {
 			err = message.NewCodeErr(message.ServiceBusy, fmt.Sprintf("(%s) Error sending %s message: %v", svc.cid(), msg.Name(), err))
 		}
@@ -298,7 +263,7 @@ func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnComple
 		return fmt.Errorf("onPublish function is nil. No need to subscribe")
 	}
 
-	_, err := svc.writeMessage(msg)
+	_, err := svc.gCore.writeMessage(msg)
 	if err != nil {
 		return message.NewCodeErr(message.ServiceBusy, fmt.Sprintf("(%s) Error sending %s messagev5: %v", svc.cid(), msg.Name(), err))
 	}
@@ -393,7 +358,7 @@ func (svc *service) subscribe(msg *message.SubscribeMessage, onComplete OnComple
 
 // unsubscribe 取消订阅主题
 func (svc *service) unsubscribe(msg *message.UnsubscribeMessage, onComplete OnCompleteFunc) error {
-	_, err := svc.writeMessage(msg)
+	_, err := svc.gCore.writeMessage(msg)
 	if err != nil {
 		return fmt.Errorf("(%s) Error sending %s messagev5: %v", svc.cid(), msg.Name(), err)
 	}
@@ -458,7 +423,7 @@ func (svc *service) unsubscribe(msg *message.UnsubscribeMessage, onComplete OnCo
 func (svc *service) ping(onComplete OnCompleteFunc) error {
 	msg := message.NewPingreqMessage()
 
-	_, err := svc.writeMessage(msg)
+	_, err := svc.gCore.writeMessage(msg)
 	if err != nil {
 		return fmt.Errorf("(%s) Error sending %s messagev5: %v", svc.cid(), msg.Name(), err)
 	}
@@ -495,22 +460,15 @@ func (svc *service) stop(isServerStop ...bool) {
 		close(svc.done)
 	}
 
-	// Close the network connection
-	if svc.conn != nil {
-		Log.Debugf("(%s) closing svc.conn", svc.cid())
-		svc.conn.Close()
-	}
-
-	if svc.in != nil {
-		svc.in.Close()
-	}
-	if svc.out != nil {
-		svc.out.Close()
+	// Close the network gCore
+	if svc.gCore != nil {
+		Log.Debugf("(%s) closing svc.gCore", svc.cid())
+		svc.gCore.Close()
 	}
 
 	//打印该客户端生命周期内的接收字节与消息条数、发送字节与消息条数
-	Log.Debugf("(%s) %s.", svc.cid(), svc.inStat)
-	Log.Debugf("(%s) %s.", svc.cid(), svc.outStat)
+	Log.Debugf("(%s) receive %s.", svc.cid(), svc.gCore.inStat)
+	Log.Debugf("(%s) send %s.", svc.cid(), svc.gCore.outStat)
 
 	// 如果客户端是无需保留会话的，则取消订阅该客户端的所有主题
 	cleanSess := svc.sess.CMsg().CleanSession()
@@ -524,7 +482,7 @@ func (svc *service) stop(isServerStop ...bool) {
 
 	//如果设置了遗嘱消息，则发送遗嘱消息，当是收到正常DisConnect消息产生的发送遗嘱消息行为，会在收到消息处处理
 	if svc.sess.CMsg().WillFlag() {
-		Log.Infof("(%s) service/stop: connection unexpectedly closed. Sending Will：.", svc.cid())
+		Log.Infof("(%s) service/stop: gCoreection unexpectedly closed. Sending Will：.", svc.cid())
 		svc.sendWillMsg()
 	}
 
@@ -534,9 +492,9 @@ func (svc *service) stop(isServerStop ...bool) {
 		core.SessionManager().Save(svc.sess)
 	}
 
-	svc.conn = nil
-	svc.in = nil
-	svc.out = nil
+	svc.gCore = nil
+
+	Log.Debugf("(%s) service closed.", svc.cid())
 }
 
 // unSubAll 取消订阅所有主题，客户端断线使用

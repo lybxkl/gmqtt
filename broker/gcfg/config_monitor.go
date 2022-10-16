@@ -1,4 +1,4 @@
-package config
+package gcfg
 
 type PProf struct {
 	Open bool `toml:"open" `

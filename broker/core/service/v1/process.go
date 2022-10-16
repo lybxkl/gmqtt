@@ -13,6 +13,7 @@ import (
 	"github.com/lybxkl/gmqtt/broker/core/message"
 	sess "github.com/lybxkl/gmqtt/broker/core/session"
 	"github.com/lybxkl/gmqtt/broker/core/topic"
+	"github.com/lybxkl/gmqtt/broker/gcfg"
 	. "github.com/lybxkl/gmqtt/common/log"
 	"github.com/lybxkl/gmqtt/util"
 	"github.com/lybxkl/gmqtt/util/bufpool"
@@ -51,20 +52,20 @@ func (svc *service) processor() {
 		}
 
 		//了解接下来是什么消息以及消息的大小
-		mtype, total, err := svc.peekMessageSize()
+		mtype, total, err := svc.gCore.peekMessageSize()
 		if err != nil {
 			if err != io.EOF {
 				Log.Errorf("(%s) Error peeking next message size", svc.cid())
 			}
 			return
 		}
-		if total > int(svc.server.cfg.MaxPacketSize) {
-			writeMessage(svc.conn, message.NewDiscMessageWithCodeInfo(message.MessageTooLong, nil))
+		if total > int(gcfg.GetGCfg().MaxPacketSize) {
+			writeMessage(svc.gCore, message.NewDiscMessageWithCodeInfo(message.MessageTooLong, nil))
 			Log.Errorf("(%s): message sent is too large", svc.cid())
 			return
 		}
 
-		msg, n, err := svc.peekMessage(mtype, total)
+		msg, n, err := svc.gCore.peekMessage(mtype, total)
 		if err != nil {
 			if err != io.EOF {
 				Log.Errorf("(%s) Error peeking next message: %v", svc.cid(), err)
@@ -74,7 +75,7 @@ func (svc *service) processor() {
 
 		Log.Debugf("(%s) Received: %s", svc.cid(), msg)
 
-		svc.inStat.Incr(uint64(n))
+		svc.gCore.inStat.Incr(uint64(n))
 
 		//处理读消息
 		err = svc.processIncoming(msg)
@@ -87,16 +88,7 @@ func (svc *service) processor() {
 					dis = message.NewDiscMessageWithCodeInfo(reasonErr.ReasonCode, []byte(reasonErr.Error()))
 				}
 
-				writeMessage(svc.conn, dis)
-			}
-			return
-		}
-
-		// 我们应该提交缓冲区中的字节，这样我们才能继续
-		_, err = svc.in.ReadCommit(total)
-		if err != nil {
-			if err != io.EOF {
-				Log.Errorf("(%s) Error committing %d read bytes: %v", svc.cid(), total, err)
+				writeMessage(svc.gCore, dis)
 			}
 			return
 		}
@@ -140,8 +132,8 @@ func (svc *service) delRequestRespInfo(msg message.Message) {
 // 流控
 func (svc *service) streamController() error {
 	// 监控流量
-	if svc.inStat.MsgTotal()%100000 == 0 {
-		Log.Warn(fmt.Sprintf("(%s) Going to process messagev5 %d", svc.cid(), svc.inStat.MsgTotal()))
+	if svc.gCore.inStat.MsgTotal()%100000 == 0 {
+		Log.Warn(fmt.Sprintf("(%s) Going to process messagev5 %d", svc.cid(), svc.gCore.inStat.MsgTotal()))
 	}
 	if svc.sign.BeyondQuota() {
 		_, _ = svc.sendBeyondQuota()
@@ -173,7 +165,7 @@ func (svc *service) sendByConn(msg message.Message) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return svc.conn.Write(b)
+	return svc.gCore.Write(b)
 }
 
 func (svc *service) processIncoming(msg message.Message) error {
@@ -208,7 +200,7 @@ func (svc *service) processIncoming(msg message.Message) error {
 
 		resp := message.NewPubrelMessage()
 		resp.SetPacketId(msg.PacketId())
-		_, err = svc.writeMessage(resp)
+		_, err = svc.gCore.writeMessage(resp)
 		if err != nil {
 			err = message.NewCodeErr(message.UnspecifiedError, err.Error())
 		}
@@ -222,7 +214,7 @@ func (svc *service) processIncoming(msg message.Message) error {
 
 		resp := message.NewPubcompMessage()
 		resp.SetPacketId(msg.PacketId())
-		_, err = svc.writeMessage(resp)
+		_, err = svc.gCore.writeMessage(resp)
 		if err != nil {
 			err = message.NewCodeErr(message.UnspecifiedError, err.Error())
 		}
@@ -258,7 +250,7 @@ func (svc *service) processIncoming(msg message.Message) error {
 	case *message.PingreqMessage:
 		// For PINGREQ messagev5, we should send back PINGRESP
 		resp := message.NewPingrespMessage()
-		_, err = svc.writeMessage(resp)
+		_, err = svc.gCore.writeMessage(resp)
 		if err != nil {
 			err = message.NewCodeErr(message.UnspecifiedError, err.Error())
 		}
@@ -482,10 +474,10 @@ func (svc *service) processPublish(msg *message.PublishMessage) error {
 		return message.NewCodeErr(message.UnAuthorized, "pub acl filter")
 	}
 
-	if svc.server.cfg.MaxQos < int(msg.QoS()) { // 判断是否是支持的qos等级，只会验证本broker内收到的，集群转发来的不会验证，前提是因为集群来的已经是验证过的
-		return message.NewCodeErr(message.UnsupportedQoSLevel, fmt.Sprintf("a maximum of qos %d is supported", svc.server.cfg.MaxQos))
+	if gcfg.GetGCfg().MaxQos < int(msg.QoS()) { // 判断是否是支持的qos等级，只会验证本broker内收到的，集群转发来的不会验证，前提是因为集群来的已经是验证过的
+		return message.NewCodeErr(message.UnsupportedQoSLevel, fmt.Sprintf("a maximum of qos %d is supported", gcfg.GetGCfg().MaxQos))
 	}
-	if msg.Retain() && !svc.server.cfg.RetainAvailable {
+	if msg.Retain() && !gcfg.GetGCfg().RetainAvailable {
 		return message.NewCodeErr(message.UnsupportedRetention, "unSupport retain message")
 	}
 
@@ -499,7 +491,7 @@ func (svc *service) processPublish(msg *message.PublishMessage) error {
 		resp := message.NewPubrecMessage()
 		resp.SetPacketId(msg.PacketId())
 
-		_, err := svc.writeMessage(resp)
+		_, err := svc.gCore.writeMessage(resp)
 		if err != nil {
 			return message.NewCodeErr(message.UnspecifiedError, err.Error())
 		}
@@ -509,7 +501,7 @@ func (svc *service) processPublish(msg *message.PublishMessage) error {
 		resp := message.NewPubackMessage()
 		resp.SetPacketId(msg.PacketId())
 
-		if _, err := svc.writeMessage(resp); err != nil {
+		if _, err := svc.gCore.writeMessage(resp); err != nil {
 			return message.NewCodeErr(message.UnspecifiedError, err.Error())
 		}
 
@@ -542,9 +534,9 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 	for _, t := range tps {
 		tpc := t
 		// 简单处理，直接断开连接，返回原因码
-		if svc.server.cfg.CloseShareSub && util.IsShareSub(tpc) {
+		if gcfg.GetGCfg().CloseShareSub && util.IsShareSub(tpc) {
 			return message.NewCodeErr(message.UnsupportedSharedSubscriptions)
-		} else if !svc.server.cfg.CloseShareSub && util.IsShareSub(tpc) && msg.TopicNoLocal(t) {
+		} else if !gcfg.GetGCfg().CloseShareSub && util.IsShareSub(tpc) && msg.TopicNoLocal(t) {
 			// 共享订阅时把非本地选项设为1将造成协议错误（Protocol Error）
 			return message.NewCodeErr(message.ProtocolError)
 		}
@@ -630,7 +622,7 @@ func (svc *service) processSubscribe(msg *message.SubscribeMessage) error {
 		return message.NewCodeErr(message.UnspecifiedError, err.Error())
 	}
 
-	if _, err := svc.writeMessage(resp); err != nil {
+	if _, err := svc.gCore.writeMessage(resp); err != nil {
 		return message.NewCodeErr(message.UnspecifiedError, err.Error())
 	}
 
@@ -667,7 +659,7 @@ func (svc *service) processUnsubscribe(msg *message.UnsubscribeMessage) error {
 	resp.SetPacketId(msg.PacketId())
 	resp.AddReasonCode(message.Success.Value())
 
-	_, err := svc.writeMessage(resp)
+	_, err := svc.gCore.writeMessage(resp)
 	if err != nil {
 		return message.NewCodeErr(message.UnspecifiedError, err.Error())
 	}

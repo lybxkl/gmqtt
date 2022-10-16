@@ -3,10 +3,10 @@ package store
 import (
 	"context"
 
-	"github.com/lybxkl/gmqtt/common/config"
+	config2 "github.com/lybxkl/gmqtt/broker/gcfg"
 )
 
 type BaseStore interface {
-	Start(ctx context.Context, config *config.GConfig) error
+	Start(ctx context.Context, config *config2.GConfig) error
 	Stop(ctx context.Context) error
 }

@@ -6,32 +6,125 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lybxkl/gmqtt/broker/core/message"
+	"github.com/lybxkl/gmqtt/broker/core/module/statistic"
+	"github.com/lybxkl/gmqtt/broker/gcfg"
 	. "github.com/lybxkl/gmqtt/common/log"
 	timeoutio "github.com/lybxkl/gmqtt/util/timeout_io"
 )
 
+type GCore struct {
+	net.Conn
+
+	// connMsg 连接消息
+	connMsg *message.ConnectMessage
+
+	//输入数据缓冲区。从连接中读取字节并放在这里。
+	in *buffer
+	// writeMessage互斥锁——序列化输出缓冲区的写操作。
+	wmu sync.Mutex
+	//输出数据缓冲区。这里写入的字节依次写入连接。
+	out *buffer
+
+	inTmp  []byte
+	outTmp []byte
+
+	inStat  statistic.Stat // 输入的记录
+	outStat statistic.Stat // 输出的记录
+
+	//等待各种goroutines完成启动和停止
+	wgStarted sync.WaitGroup
+	wgStopped sync.WaitGroup
+
+	stop chan error
+	done int
+	err  error
+}
+
+// NewGCore 创建核心
+func NewGCore(conn net.Conn, conMsg *message.ConnectMessage) *GCore {
+	in, _ := newBuffer(defaultBufferSize)
+	out, _ := newBuffer(defaultBufferSize)
+	gCore := &GCore{
+		Conn:      conn,
+		connMsg:   conMsg,
+		in:        in,
+		wmu:       sync.Mutex{},
+		out:       out,
+		inTmp:     make([]byte, 0),
+		outTmp:    make([]byte, 0),
+		inStat:    statistic.Stat{},
+		outStat:   statistic.Stat{},
+		wgStarted: sync.WaitGroup{},
+		wgStopped: sync.WaitGroup{},
+		stop:      make(chan error),
+		done:      0,
+	}
+
+	gCore.wgStarted.Add(2)
+	gCore.wgStopped.Add(2)
+	go gCore.receiver()
+	go gCore.sender()
+
+	gCore.wgStarted.Wait()
+	Log.Debugf("<<(%s)>> GCore run", gCore.ClientId())
+	return gCore
+}
+
+func (core *GCore) ClientId() string {
+	if core.connMsg == nil {
+		return ""
+	}
+	return string(core.connMsg.ClientId())
+}
+
+func (core *GCore) IsDone() bool {
+	return core.done == 1
+}
+
+func (core *GCore) Close() error {
+	if core.done == 1 {
+		return nil
+	}
+	core.done = 1
+	close(core.stop)
+
+	if core.in != nil {
+		_ = core.in.Close()
+	}
+	if core.out != nil {
+		_ = core.out.Close()
+	}
+
+	// 等待优雅关闭处理
+	core.wgStopped.Wait()
+
+	if core.Conn != nil {
+		return core.Conn.Close()
+	}
+	Log.Debugf("<<(%s)>> GCore closed ", core.ClientId())
+	return nil
+}
+
 // receiver() reads data from the network, and writes the data into the incoming buffer
-func (svc *service) receiver() {
+func (core *GCore) receiver() {
 	defer func() {
 		if r := recover(); r != nil {
-			Log.Errorf("(%s) Recovering from panic: %v", svc.cid(), r)
+			core.err = fmt.Errorf("<<(%s)>> recovering from panic: %v", core.ClientId(), r)
 		}
 
-		svc.wgStopped.Done()
-		if svc.sign.TooManyMessages() {
-			Log.Debugf("TooManyMessages stop in buf, client : %v", svc.cid())
-		}
-		Log.Debugf("(%s) Stopping receiver", svc.cid())
+		core.wgStopped.Done()
+		Log.Debugf("<<(%s)>> stopping receiver", core.ClientId())
 	}()
 
-	Log.Debugf("(%s) Starting receiver", svc.cid())
+	Log.Debugf("<<(%s)>> starting receiver", core.ClientId())
 
-	svc.wgStarted.Done()
+	core.wgStarted.Done()
 
-	switch conn := svc.conn.(type) {
+	switch conn := core.Conn.(type) {
 	// 普通tcp连接
 	case net.Conn:
 		// 如果保持连接的值非零，并且服务端在1.5倍的保持连接时间内没有收到客户端的控制报文，
@@ -39,96 +132,93 @@ func (svc *service) receiver() {
 		// 保持连接的实际值是由应用指定的，一般是几分钟。允许的最大值是18小时12分15秒(两个字节)
 		// 保持连接（Keep Alive）值为零的结果是关闭保持连接（Keep Alive）机制。
 		// 如果保持连接（Keep Alive）612 值为零，客户端不必按照任何特定的时间发送MQTT控制报文。
-		keepAlive := time.Second * time.Duration(svc.server.cfg.Keepalive)
+		keepAlive := time.Second * time.Duration(gcfg.GetGCfg().Keepalive)
 
 		r := timeoutio.NewReader(conn, keepAlive+(keepAlive/2))
 		for {
-			_, err := svc.in.ReadFrom(r)
+			_, err := core.in.ReadFrom(r)
 			// 检查done是否关闭，如果关闭，退出
 			if err != nil {
 				if er, ok := err.(*net.OpError); ok && er.Err.Error() == "i/o timeout" {
-					// TODO 更新session状态
-					Log.Warnf("<<(%s)>> 读超时关闭：%v", svc.cid(), er)
+					core.err = fmt.Errorf("<<(%s)>> 读超时关闭：%v", core.ClientId(), er)
 					return
 				}
-				if svc.isDone() && strings.Contains(err.Error(), "use of closed network connection") {
+				if core.IsDone() && strings.Contains(err.Error(), "use of closed network connection") {
 					return
 				}
 				if err != io.EOF {
 					//连接异常或者断线啥的
-					// TODO 更新session状态
-					Log.Errorf("<<(%s)>> 连接异常关闭：%v", svc.cid(), err.Error())
+					core.err = fmt.Errorf("<<(%s)>> 连接异常关闭：%v", core.ClientId(), err.Error())
+					return
 				}
 				return
 			}
 		}
 	//添加websocket，启动cl里有对websocket转tcp，这里就不用处理
 	//case *websocket.Conn:
-	//	Log.Errorf("(%s) Websocket: %v", svc.cid(), ErrInvalidConnectionType)
+	//	Log.Errorf("(%s) Websocket: %v",core.ClientId(), ErrInvalidConnectionType)
 
 	default:
-		Log.Errorf("未知异常 (%s) %v", svc.cid(), ErrInvalidConnectionType)
+		core.err = fmt.Errorf("<<(%s)>> 未知异常： %v", core.ClientId(), ErrInvalidConnectionType)
 	}
 }
 
 // sender() writes data from the outgoing buffer to the network
-func (svc *service) sender() {
+func (core *GCore) sender() {
 	defer func() {
 		if r := recover(); r != nil {
-			Log.Errorf("(%s) Recovering from panic: %v", svc.cid(), r)
+			core.err = fmt.Errorf("<<(%s)>> Recovering from panic: %v", core.ClientId(), r)
 		}
 
-		svc.wgStopped.Done()
-		if svc.sign.TooManyMessages() { // && svc.out.Len() == 0
-			Log.Warnf("BeyondQuota or TooManyMessages stop out buf, client : %v", svc.cid())
-		}
-		Log.Debugf("(%s) Stopping sender", svc.cid())
+		core.wgStopped.Done()
+		Log.Debugf("<<(%s)>> Stopping sender", core.ClientId())
 	}()
 
-	Log.Debugf("(%s) Starting sender", svc.cid())
+	Log.Debugf("<<(%s)>> Starting sender", core.ClientId())
 
-	svc.wgStarted.Done()
-	switch conn := svc.conn.(type) {
+	core.wgStarted.Done()
+	switch conn := core.Conn.(type) {
 	case net.Conn:
-		writeTimeout := time.Second * time.Duration(svc.server.cfg.WriteTimeout)
+		writeTimeout := time.Second * time.Duration(gcfg.GetGCfg().WriteTimeout)
 		r := timeoutio.NewWriter(conn, writeTimeout+(writeTimeout/2))
 		for {
-			_, err := svc.out.WriteTo(r)
+			_, err := core.out.WriteTo(r)
 			if err != nil {
 				if er, ok := err.(*net.OpError); ok && er.Err.Error() == "i/o timeout" {
-					Log.Warnf("<<(%s)>> 写超时关闭：%v", svc.cid(), er)
+					core.err = fmt.Errorf("<<(%s)>> 写超时关闭：%v", core.ClientId(), er)
 					return
 				}
-				if svc.isDone() && (strings.Contains(err.Error(), "use of closed network connection")) {
+				if core.IsDone() && (strings.Contains(err.Error(), "use of closed network connection")) {
 					// TODO 怎么处理这些未发送的？
 					// 无需保存会话的直接断开即可，需要的也无需，因为会重发
 					return
 				}
 				if err != io.EOF {
-					Log.Errorf("(%s) error writing data: %v", svc.cid(), err)
+					core.err = fmt.Errorf("<<(%s)>> error writing data: %v", core.ClientId(), err)
+					return
 				}
 				return
 			}
 		}
 
 	//case *websocket.Conn:
-	//	Log.Errorf("(%s) Websocket not supported", svc.cid())
+	//	Log.Errorf("(%s) Websocket not supported",core.ClientId())
 
 	default:
-		Log.Errorf("(%s) Invalid connection type", svc.cid())
+		core.err = fmt.Errorf("<<(%s)>> Invalid connection type", core.ClientId())
 	}
 }
 
 // peekMessageSize()读取，但不提交，足够的字节来确定大小
-//下一条消息，并返回类型和大小。
-func (svc *service) peekMessageSize() (message.MessageType, int, error) {
+// @return: 下一条消息，并返回类型和大小。
+func (core *GCore) peekMessageSize() (message.MessageType, int, error) {
 	var (
 		b   []byte
 		err error
 		cnt int = 2
 	)
 
-	if svc.in == nil {
+	if core.in == nil {
 		err = ErrBufferNotReady
 		return 0, 0, err
 	}
@@ -142,7 +232,7 @@ func (svc *service) peekMessageSize() (message.MessageType, int, error) {
 		}
 
 		//从输入缓冲区中读取cnt字节。
-		b, err = svc.in.ReadWait(cnt)
+		b, err = core.in.ReadWait(cnt)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -173,8 +263,8 @@ func (svc *service) peekMessageSize() (message.MessageType, int, error) {
 }
 
 // peekMessage()从缓冲区读取消息，但是没有提交字节。
-//这意味着缓冲区仍然认为字节还没有被读取。
-func (svc *service) peekMessage(mtype message.MessageType, total int) (message.Message, int, error) {
+// 这意味着缓冲区仍然认为字节还没有被读取。
+func (core *GCore) peekMessage(mtype message.MessageType, total int) (message.Message, int, error) {
 	var (
 		b    []byte
 		err  error
@@ -182,14 +272,14 @@ func (svc *service) peekMessage(mtype message.MessageType, total int) (message.M
 		msg  message.Message
 	)
 
-	if svc.in == nil {
+	if core.in == nil {
 		return nil, 0, ErrBufferNotReady
 	}
 
 	//Peek，直到我们得到总字节数
 	for i = 0; ; i++ {
 		//从输入缓冲区Peekremlen字节数。
-		b, err = svc.in.ReadWait(total)
+		b, err = core.in.ReadWait(total)
 		if err != nil && err != ErrBufferInsufficientData {
 			return nil, 0, err
 		}
@@ -206,12 +296,17 @@ func (svc *service) peekMessage(mtype message.MessageType, total int) (message.M
 	}
 
 	n, err = msg.Decode(b)
+	if err != nil {
+		return nil, n, err
+	}
+	// 提交缓冲区
+	_, err = core.in.ReadCommit(n)
 	return msg, n, err
 }
 
-// readMessage() reads and copies a messagev5 from the buffer. The buffer bytes are
+// readMessage() reads and copies a message from the buffer. The buffer bytes are
 // committed as a result of the read.
-func (svc *service) readMessage(mtype message.MessageType, total int) (message.Message, int, error) {
+func (core *GCore) readMessage(mtype message.MessageType, total int) (message.Message, int, error) {
 	var (
 		b   []byte
 		err error
@@ -219,19 +314,19 @@ func (svc *service) readMessage(mtype message.MessageType, total int) (message.M
 		msg message.Message
 	)
 
-	if svc.in == nil {
+	if core.in == nil {
 		err = ErrBufferNotReady
 		return nil, 0, err
 	}
 
-	if len(svc.intmp) < total {
-		svc.intmp = make([]byte, total)
+	if len(core.inTmp) < total {
+		core.inTmp = make([]byte, total)
 	}
 
 	// Read until we get total bytes
 	l := 0
 	for l < total {
-		n, err = svc.in.Read(svc.intmp[l:])
+		n, err = core.in.Read(core.inTmp[l:])
 		l += n
 		Log.Debugf("read %d bytes, total %d", n, l)
 		if err != nil {
@@ -239,7 +334,7 @@ func (svc *service) readMessage(mtype message.MessageType, total int) (message.M
 		}
 	}
 
-	b = svc.intmp[:total]
+	b = core.inTmp[:total]
 
 	msg, err = mtype.New()
 	if err != nil {
@@ -250,11 +345,11 @@ func (svc *service) readMessage(mtype message.MessageType, total int) (message.M
 	return msg, n, err
 }
 
-//writeMessage()将消息写入传出缓冲区，
+// writeMessage()将消息写入传出缓冲区，
 // 客户端限制的最大可接收包大小，由客户端执行处理，因为超过限制的报文将导致协议错误，客户端发送包含原因码0x95（报文过大）的DISCONNECT报文给broker
-func (svc *service) writeMessage(msg message.Message) (int, error) {
+func (core *GCore) writeMessage(msg message.Message) (int, error) {
 	// 当连接消息中请求问题信息为0，则需要去除部分数据再发送
-	svc.delRequestRespInfo(msg)
+	core.delRequestRespInfo(msg)
 
 	var (
 		l    int = msg.Len()
@@ -264,7 +359,7 @@ func (svc *service) writeMessage(msg message.Message) (int, error) {
 		wrap bool
 	)
 
-	if svc.out == nil {
+	if core.out == nil {
 		return 0, ErrBufferNotReady
 	}
 
@@ -281,25 +376,25 @@ func (svc *service) writeMessage(msg message.Message) (int, error) {
 	//对于这个客户端，它们将全部阻塞。
 	//但是，现在可以这样做。
 	// FIXME: Try to find a better way than a mutex...if possible.
-	svc.wmu.Lock()
-	defer svc.wmu.Unlock()
+	core.wmu.Lock()
+	defer core.wmu.Unlock()
 
-	buf, wrap, err = svc.out.WriteWait(l)
+	buf, wrap, err = core.out.WriteWait(l)
 	if err != nil {
 		return 0, err
 	}
 
 	if wrap {
-		if len(svc.outtmp) < l {
-			svc.outtmp = make([]byte, l)
+		if len(core.outTmp) < l {
+			core.outTmp = make([]byte, l)
 		}
 
-		n, err = msg.Encode(svc.outtmp[0:])
+		n, err = msg.Encode(core.outTmp[0:])
 		if err != nil {
 			return 0, err
 		}
 
-		m, err = svc.out.Write(svc.outtmp[0:n])
+		m, err = core.out.Write(core.outTmp[0:n])
 		if err != nil {
 			return m, err
 		}
@@ -309,13 +404,29 @@ func (svc *service) writeMessage(msg message.Message) (int, error) {
 			return 0, err
 		}
 
-		m, err = svc.out.WriteCommit(n)
+		m, err = core.out.WriteCommit(n)
 		if err != nil {
 			return 0, err
 		}
 	}
 
-	svc.outStat.Incr(uint64(m))
+	core.outStat.Incr(uint64(m))
 
 	return m, nil
+}
+
+// 当连接消息中请求问题信息为0，则需要去除部分数据再发送
+// connectAck 和 disconnect中可不去除
+func (core *GCore) delRequestRespInfo(msg message.Message) {
+	if core.connMsg.RequestProblemInfo() == 0 {
+		if cl, ok := msg.(message.CleanReqProblemInfo); ok {
+			switch msg.Type() {
+			case message.CONNACK, message.DISCONNECT, message.PUBLISH:
+			default:
+				cl.SetReasonStr(nil)
+				cl.SetUserProperties(nil)
+				Log.Debugf("<<(%s)>> 去除请求问题信息: %s", core.connMsg.ClientId(), msg.Type())
+			}
+		}
+	}
 }

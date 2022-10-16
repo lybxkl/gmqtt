@@ -6,8 +6,8 @@ import (
 
 	"github.com/lybxkl/gmqtt/broker/core/message"
 	"github.com/lybxkl/gmqtt/broker/core/store"
+	config2 "github.com/lybxkl/gmqtt/broker/gcfg"
 
-	"github.com/lybxkl/gmqtt/common/config"
 	"github.com/lybxkl/gmqtt/util/collection"
 )
 
@@ -22,7 +22,7 @@ func NewMemMsgStore() store.MessageStore {
 		retainTable: collection.NewSafeMap(),
 	}
 }
-func (m *memMessageStore) Start(_ context.Context, config *config.GConfig) error {
+func (m *memMessageStore) Start(_ context.Context, config *config2.GConfig) error {
 	return nil
 }
 

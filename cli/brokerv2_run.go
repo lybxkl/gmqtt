@@ -13,8 +13,8 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/lybxkl/gmqtt/broker/core/service/v1"
+	"github.com/lybxkl/gmqtt/broker/gcfg"
 	_ "github.com/lybxkl/gmqtt/broker/impl"
-	"github.com/lybxkl/gmqtt/common/config"
 	. "github.com/lybxkl/gmqtt/common/log"
 	"github.com/lybxkl/gmqtt/util"
 )
@@ -23,11 +23,10 @@ var once sync.Once
 
 func Start() {
 	once.Do(func() {
-		cfg := config.GetGCfg()
 		// 日志初始化
-		NewGLog(cfg.Log.GetLevel())
+		NewGLog(gcfg.GetGCfg().Log.GetLevel())
 
-		svr, err := brokerInitAndRun(cfg)
+		svr, err := brokerInitAndRun()
 		util.MustPanic(err)
 
 		svr.Wait()
@@ -35,7 +34,8 @@ func Start() {
 }
 
 // broker 初始化
-func brokerInitAndRun(cfg *config.GConfig) (*service.Server, error) {
+func brokerInitAndRun() (*service.Server, error) {
+	cfg := gcfg.GetGCfg()
 	var (
 		mqttAddr    = cfg.Broker.MqttAddr
 		wsAddr      = cfg.Broker.WsAddr
@@ -45,7 +45,7 @@ func brokerInitAndRun(cfg *config.GConfig) (*service.Server, error) {
 		wssCertPath = cfg.Broker.WssCertPath
 	)
 
-	svr := service.NewServer(cfg, mqttAddr)
+	svr := service.NewServer(mqttAddr)
 
 	exitSignal(svr)
 	pprof(cfg.PProf.Open, cfg.PProf.Port)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/lybxkl/gmqtt/broker/core"
+	"github.com/lybxkl/gmqtt/broker/gcfg"
 	"github.com/lybxkl/gmqtt/util/collection"
 	"github.com/lybxkl/gmqtt/util/cron"
 	"github.com/lybxkl/gmqtt/util/gopool"
@@ -22,7 +23,6 @@ import (
 	"github.com/lybxkl/gmqtt/broker/core/message"
 	sess "github.com/lybxkl/gmqtt/broker/core/session"
 
-	"github.com/lybxkl/gmqtt/common/config"
 	consts "github.com/lybxkl/gmqtt/common/constant"
 	. "github.com/lybxkl/gmqtt/common/log"
 	"github.com/lybxkl/gmqtt/util"
@@ -45,7 +45,6 @@ func GetServerName() string {
 type Server struct {
 	ctx    context.Context
 	cancel func()
-	cfg    *config.GConfig
 
 	// 增强认证允许的方法
 	authPlusAllows *sync.Map // map[string]authplus.AuthPlus
@@ -69,7 +68,7 @@ type Server struct {
 	middleware middleware.Options
 }
 
-func NewServer(cfg *config.GConfig, uri string) *Server {
+func NewServer(uri string) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -78,7 +77,6 @@ func NewServer(cfg *config.GConfig, uri string) *Server {
 	return &Server{
 		ctx:        ctx,
 		cancel:     cancel,
-		cfg:        cfg,
 		quit:       make(chan struct{}),
 		uri:        u,
 		svcs:       collection.NewSafeMap(),
@@ -208,7 +206,7 @@ func (server *Server) handleConnection(conn net.Conn) (err error) {
 	// 如果是连接错误，请返回正确的连接错误
 
 	// 等待连接认证, 使用连接超时配置作为读写超时配置
-	req, resp, err := server.conAuth(timeoutio.NewRWCloser(conn, time.Second*time.Duration(server.cfg.ConnectTimeout)))
+	req, resp, err := server.conAuth(timeoutio.NewRWCloser(conn, time.Second*time.Duration(gcfg.GetGCfg().ConnectTimeout)))
 	if err != nil {
 		return err
 	}
@@ -220,7 +218,7 @@ func (server *Server) handleConnection(conn net.Conn) (err error) {
 		id:     atomic.AddUint64(&gsvcid, 1),
 		client: false, // 非客户端模式
 
-		conn:   conn,
+		gCore:  NewGCore(conn, req),
 		server: server,
 	}
 	svc.sess, err = server.getSession(svc.id, req, resp)
@@ -230,11 +228,7 @@ func (server *Server) handleConnection(conn net.Conn) (err error) {
 
 	resp.SetReasonCode(message.Success)
 
-	svc.inStat.Incr(uint64(req.Len()))
-	// 设置配额和limiter
-	// TODO 简单设置测试
-	svc.quota = 0 // 此配额需要持久化
-	svc.limit = 0 // 限速，每秒100次请求
+	svc.gCore.inStat.Incr(uint64(req.Len()))
 
 	if err = svc.start(resp); err != nil {
 		svc.stop()
@@ -251,7 +245,7 @@ func (server *Server) handleConnection(conn net.Conn) (err error) {
 // 连接认证
 func (server *Server) conAuth(conn io.ReadWriteCloser) (*message.ConnectMessage, *message.ConnackMessage, error) {
 	resp := message.NewConnackMessage()
-	if !server.cfg.Broker.CloseShareSub { // 简单处理，热修改需要考虑的东西有点复杂
+	if !gcfg.GetGCfg().Broker.CloseShareSub { // 简单处理，热修改需要考虑的东西有点复杂
 		resp.SetSharedSubscriptionAvailable(1)
 	}
 	// 从本次连接中获取到connectMessage
@@ -267,27 +261,30 @@ func (server *Server) conAuth(conn io.ReadWriteCloser) (*message.ConnectMessage,
 	}
 
 	// 判断是否允许空client id
-	if len(req.ClientId()) == 0 && !server.cfg.Broker.AllowZeroLengthClientId {
-		writeMessage(conn, message.NewDiscMessageWithCodeInfo(message.CustomerIdentifierInvalid, []byte("the length of the client ID cannot be zero")))
-		return nil, nil, errors.New("the length of the client ID cannot be zero")
+	if len(req.ClientId()) == 0 && !gcfg.GetGCfg().Broker.AllowZeroLengthClientId {
+		info := "the length of the client ID cannot be zero"
+		writeMessage(conn, message.NewDiscMessageWithCodeInfo(message.CustomerIdentifierInvalid, []byte(info)))
+		return nil, nil, errors.New(info)
 	}
-	if server.cfg.Broker.MaxKeepalive > 0 && req.KeepAlive() > server.cfg.Broker.MaxKeepalive {
-		writeMessage(conn, message.NewDiscMessageWithCodeInfo(message.UnspecifiedError, []byte("the keepalive value exceeds the maximum value")))
-		return nil, nil, errors.New("the keepalive value exceeds the maximum value")
+	if gcfg.GetGCfg().Broker.MaxKeepalive > 0 && req.KeepAlive() > gcfg.GetGCfg().Broker.MaxKeepalive {
+		info := "the keepalive value exceeds the maximum value"
+		writeMessage(conn, message.NewDiscMessageWithCodeInfo(message.UnspecifiedError, []byte(info)))
+		return nil, nil, errors.New(info)
 	}
-	if server.cfg.Broker.MaxPacketSize > 0 && req.Len() > int(server.cfg.Broker.MaxPacketSize) { // 包大小限制
-		writeMessage(conn, message.NewDiscMessageWithCodeInfo(message.MessageTooLong, []byte("exceeds the maximum package size")))
-		return nil, nil, errors.New("exceeds the maximum package size")
+	if gcfg.GetGCfg().Broker.MaxPacketSize > 0 && req.Len() > int(gcfg.GetGCfg().Broker.MaxPacketSize) { // 包大小限制
+		info := "exceeds the maximum package size"
+		writeMessage(conn, message.NewDiscMessageWithCodeInfo(message.MessageTooLong, []byte(info)))
+		return nil, nil, errors.New(info)
 	}
-	resp.SetMaxPacketSize(server.cfg.Broker.MaxPacketSize)
+	resp.SetMaxPacketSize(gcfg.GetGCfg().Broker.MaxPacketSize)
 
-	if server.cfg.Broker.MaxQos < int(req.WillQos()) { // 遗嘱消息qos也需要遵循最大qos
+	if gcfg.GetGCfg().Broker.MaxQos < int(req.WillQos()) { // 遗嘱消息qos也需要遵循最大qos
 		writeMessage(conn, message.NewDiscMessageWithCodeInfo(message.UnsupportedQoSLevel, nil))
-		return nil, nil, errors.New("exceeds the max qos: " + strconv.Itoa(server.cfg.Broker.MaxQos))
+		return nil, nil, errors.New("exceeds the max qos: " + strconv.Itoa(gcfg.GetGCfg().Broker.MaxQos))
 	}
-	resp.SetMaxQos(byte(server.cfg.Broker.MaxQos)) // 设置最大qos等级
+	resp.SetMaxQos(byte(gcfg.GetGCfg().Broker.MaxQos)) // 设置最大qos等级
 
-	if server.cfg.Broker.RetainAvailable { // 是否支持保留消息
+	if gcfg.GetGCfg().Broker.RetainAvailable { // 是否支持保留消息
 		resp.SetRetainAvailable(1)
 	} else {
 		if req.WillRetain() {
@@ -297,7 +294,7 @@ func (server *Server) conAuth(conn io.ReadWriteCloser) (*message.ConnectMessage,
 		resp.SetRetainAvailable(0)
 	}
 
-	svcConf := server.cfg.Server
+	svcConf := gcfg.GetGCfg().Server
 	if svcConf.RedirectOpen { // 重定向
 		dis := message.NewDisconnectMessage()
 		if svcConf.RedirectIsForEver {
@@ -320,7 +317,7 @@ func (server *Server) conAuth(conn io.ReadWriteCloser) (*message.ConnectMessage,
 	// broker 的默认值
 	if req.KeepAlive() == 0 {
 		//设置默认的keepalive数，五分钟
-		req.SetKeepAlive(uint16(server.cfg.Keepalive))
+		req.SetKeepAlive(uint16(gcfg.GetGCfg().Keepalive))
 	}
 
 	if req.RequestProblemInfo() == 0 {
@@ -414,20 +411,20 @@ func (server *Server) checkAndInitConfig() error {
 	var err error
 
 	server.configOnce.Do(func() {
-		if server.cfg.Keepalive == 0 {
-			server.cfg.Keepalive = consts.KeepAlive
+		if gcfg.GetGCfg().Keepalive == 0 {
+			gcfg.GetGCfg().Keepalive = consts.KeepAlive
 		}
 
-		if server.cfg.ConnectTimeout == 0 {
-			server.cfg.ConnectTimeout = consts.ConnectTimeout
+		if gcfg.GetGCfg().ConnectTimeout == 0 {
+			gcfg.GetGCfg().ConnectTimeout = consts.ConnectTimeout
 		}
 
-		if server.cfg.AckTimeout == 0 {
-			server.cfg.AckTimeout = consts.AckTimeout
+		if gcfg.GetGCfg().AckTimeout == 0 {
+			gcfg.GetGCfg().AckTimeout = consts.AckTimeout
 		}
 
-		if server.cfg.TimeoutRetries == 0 {
-			server.cfg.TimeoutRetries = consts.TimeoutRetries
+		if gcfg.GetGCfg().TimeoutRetries == 0 {
+			gcfg.GetGCfg().TimeoutRetries = consts.TimeoutRetries
 		}
 
 		// cluster
@@ -437,7 +434,7 @@ func (server *Server) checkAndInitConfig() error {
 		server.initMiddleware(middleware.WithConsole())
 
 		// 打印启动banner
-		printBanner(server.cfg.Version)
+		printBanner(gcfg.GetGCfg().Version)
 		return
 	})
 

@@ -63,8 +63,8 @@ func NewGLog(level Level) Logger {
 			MessageKey:     "msg",
 			StacktraceKey:  "stacktrace",
 			LineEnding:     zapcore.DefaultLineEnding,
-			EncodeLevel:    zapcore.LowercaseLevelEncoder, // 小写编码器
-			EncodeTime:     zapcore.ISO8601TimeEncoder,    // ISO8601 UTC 时间格式
+			EncodeLevel:    zapcore.LowercaseLevelEncoder,                          // 小写编码器
+			EncodeTime:     zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05.000"), // ISO8601 UTC 时间格式
 			EncodeDuration: zapcore.SecondsDurationEncoder,
 			EncodeCaller:   zapcore.ShortCallerEncoder, // 短路径编码器
 		}

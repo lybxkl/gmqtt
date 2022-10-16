@@ -9,8 +9,8 @@ import (
 	"github.com/lybxkl/gmqtt/broker/core/message"
 	sess "github.com/lybxkl/gmqtt/broker/core/session"
 	"github.com/lybxkl/gmqtt/broker/core/store"
+	config2 "github.com/lybxkl/gmqtt/broker/gcfg"
 
-	"github.com/lybxkl/gmqtt/common/config"
 	"github.com/lybxkl/gmqtt/util/collection"
 )
 
@@ -37,7 +37,7 @@ func NewMemSessStore() store.SessionStore {
 		secTwoCache:  collection.NewSafeMap(),
 	}
 }
-func (m *memSessionStore) Start(_ context.Context, config *config.GConfig) error {
+func (m *memSessionStore) Start(_ context.Context, config *config2.GConfig) error {
 	return nil
 }
 

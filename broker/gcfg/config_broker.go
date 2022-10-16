@@ -1,4 +1,4 @@
-package config
+package gcfg
 
 type Broker struct {
 	MqttAddr      string `toml:"mqttAddr" validate:"default=tcp://:1883"`

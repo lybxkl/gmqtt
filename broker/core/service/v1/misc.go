@@ -88,7 +88,14 @@ func writeMessage(conn io.Writer, msg message.Message) error {
 	}
 	Log.Debugf("Writing: %s", msg)
 
-	return writeMessageBuffer(conn, buf.Bytes())
+	err = writeMessageBuffer(conn, buf.Bytes())
+	if err != nil {
+		return err
+	}
+	if gCore, ok := conn.(*GCore); ok {
+		gCore.outStat.Incr(uint64(msg.Len())) // 连接认证过程不计入
+	}
+	return nil
 }
 
 func getMessageBuffer(conn io.Reader) ([]byte, error) {

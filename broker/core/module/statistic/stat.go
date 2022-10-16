@@ -20,5 +20,5 @@ func (svc *Stat) MsgTotal() uint64 {
 }
 
 func (svc Stat) String() string {
-	return fmt.Sprintf("received %d bytes in %d messages.", svc.bytes, svc.msgTotal)
+	return fmt.Sprintf("%d bytes in %d messages.", svc.bytes, svc.msgTotal)
 }
